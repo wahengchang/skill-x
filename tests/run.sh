@@ -8,9 +8,10 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 passed=0
 failed=0
 
-# Keep the suite hermetic: never let a locally installed OpenCode decide which
-# code path the sync scripts take. The detection test overrides this itself.
+# Keep the suite hermetic: never let locally installed agents decide which
+# code paths the scripts take. Detection and selection tests override these.
 export SKILL_X_OPENCODE_VERSION=v1
+export SKILL_X_AGENTS=claude,codex,opencode
 
 run_test() {
   local name=$1
@@ -34,6 +35,8 @@ copy_project() {
   mkdir -p "$destination"
   cp -a "$PROJECT_ROOT/." "$destination/"
   rm -rf "$destination/.git" "$destination/commands" "$destination/opencode-commands"
+  # Agent-local state is not part of a fresh repository fixture.
+  rm -rf "$destination/.claude"
 }
 
 test_build_injects_header_and_support_files() {
@@ -1137,6 +1140,426 @@ test_cloud_bootstrap_uses_source_only_ref() {
   [[ ! -L "$home/.claude/skills/example-skill" ]]
 }
 
+# ---------------------------------------------------------------------------
+# Lifecycle CLI (bin/skill-x)
+# ---------------------------------------------------------------------------
+
+# A checkout plus a bare remote it tracks, already installed for one agent.
+make_installed_fixture() {
+  local project=$1 remote=$2 home=$3 agents=$4
+  make_git_fixture "$project" "$remote"
+  HOME="$home" SKILL_X_AGENTS="$agents" "$project/bin/skill-x" install >/dev/null 2>&1
+}
+
+manifest_of() {
+  # -print -quit rather than a pipe into head: the suite runs with pipefail and
+  # a killed find would fail the caller.
+  find "$1/.local/state/skill-x" -mindepth 2 -maxdepth 2 -name install.json -print -quit 2>/dev/null
+}
+
+test_init_installs_only_selected_agents() {
+  local project="$TEST_ROOT/select"
+  local home="$TEST_ROOT/select-home"
+  copy_project "$project"
+
+  HOME="$home" "$project/bin/skill-x" init --agents claude >/dev/null
+
+  [[ -L "$home/.claude/skills/example-skill" ]]
+  # Nothing is created for an agent the user did not select.
+  [[ ! -e "$home/.codex" ]]
+  [[ ! -e "$home/.agents" ]]
+  [[ ! -e "$home/.config/opencode" ]]
+
+  # An unknown agent is rejected instead of being silently ignored.
+  if HOME="$home" "$project/bin/skill-x" init --agents nope >/dev/null 2>&1; then
+    return 1
+  fi
+}
+
+test_install_is_idempotent_and_records_a_manifest() {
+  local project="$TEST_ROOT/idempotent"
+  local home="$TEST_ROOT/idempotent home"   # a space proves the JSON round-trips
+  copy_project "$project"
+
+  HOME="$home" "$project/bin/skill-x" install --agents claude,opencode >/dev/null
+  local manifest first
+  manifest=$(manifest_of "$home")
+  [[ -n "$manifest" ]]
+  cp "$manifest" "$project/manifest-1.json"
+  first=$(find "$home" -mindepth 1 | sort)
+
+  # An empty SKILL_X_AGENTS falls through to the recorded selection.
+  HOME="$home" SKILL_X_AGENTS= "$project/bin/skill-x" install >/dev/null
+  [[ "$(find "$home" -mindepth 1 | sort)" == "$first" ]]
+
+  # Only the timestamps may move between two identical installs.
+  diff <(rg -v '"last_' "$project/manifest-1.json") <(rg -v '"last_' "$manifest")
+
+  rg -q '"agents": \["claude", "opencode"\]' "$manifest"
+  rg -q '"opencode_mode": "v1"' "$manifest"
+  rg -q '"skills": \["example-skill", "funny-text-rewriter", "herdr"\]' "$manifest"
+  rg -qF "\"checkout_path\": \"$project\"" "$manifest"
+  # Paths containing a space survive writing and reading the manifest.
+  rg -qF "\"path\": \"$home/.claude/skills/example-skill\"" "$manifest"
+  HOME="$home" "$project/bin/skill-x" doctor --strict >/dev/null
+}
+
+test_install_repairs_a_moved_checkout() {
+  local project="$TEST_ROOT/moved"
+  local moved="$TEST_ROOT/moved-elsewhere"
+  local home="$TEST_ROOT/moved-home"
+  copy_project "$project"
+  git -C "$project" init -q
+  HOME="$home" "$project/bin/skill-x" install --agents claude >/dev/null
+
+  mv "$project" "$moved"
+
+  # The stale absolute links must be identified, not just reported as broken.
+  HOME="$home" "$moved/bin/skill-x" doctor > "$moved/doctor.txt" 2>&1 || true
+  rg -q "checkout recorded at $project but running from $moved" "$moved/doctor.txt"
+  rg -q 'STALE' "$moved/doctor.txt"
+  if HOME="$home" "$moved/bin/skill-x" doctor --strict >/dev/null 2>&1; then
+    return 1
+  fi
+
+  HOME="$home" SKILL_X_AGENTS= "$moved/bin/skill-x" install >/dev/null
+  HOME="$home" "$moved/bin/skill-x" doctor --strict >/dev/null
+  [[ $(readlink "$home/.claude/skills/example-skill") == "$moved/commands/example-skill" ]]
+}
+
+test_sync_drops_deselected_agents() {
+  local project="$TEST_ROOT/deselect"
+  local home="$TEST_ROOT/deselect-home"
+  copy_project "$project"
+  HOME="$home" "$project/bin/skill-x" install --agents claude,opencode >/dev/null
+  [[ -L "$home/.config/opencode/skills/example-skill" ]]
+  mkdir -p "$home/.config/opencode/commands"
+  echo 'user owned' > "$home/.config/opencode/commands/mine.md"
+
+  HOME="$home" "$project/bin/skill-x" sync --agents claude >/dev/null 2>&1
+
+  [[ -L "$home/.claude/skills/example-skill" ]]
+  [[ ! -e "$home/.config/opencode/skills/example-skill" ]]
+  [[ ! -e "$home/.config/opencode/commands/example-skill.md" ]]
+  [[ -f "$home/.config/opencode/commands/mine.md" ]]
+  HOME="$home" "$project/bin/skill-x" doctor --strict >/dev/null
+}
+
+test_status_reports_behind_and_stable_json() {
+  local project="$TEST_ROOT/status"
+  local remote="$TEST_ROOT/status.git"
+  local home="$TEST_ROOT/status-home"
+  local author="$TEST_ROOT/status-author"
+  make_installed_fixture "$project" "$remote" "$home" claude
+
+  HOME="$home" "$project/bin/skill-x" status --json > "$TEST_ROOT/status-current.json"
+  rg -q '"state": "current"' "$TEST_ROOT/status-current.json"
+  rg -q '"update_available": false' "$TEST_ROOT/status-current.json"
+
+  # The JSON contract is the machine-readable surface; keep its shape pinned.
+  diff <(rg -o '^  "[a-z_]+"' "$TEST_ROOT/status-current.json" | tr -d ' "') - <<'EOF'
+schema
+installation_id
+checkout_path
+recorded_checkout_path
+checkout_moved
+installed
+repository_url
+commit
+branch
+upstream
+state
+state_reason
+behind
+ahead
+dirty
+update_available
+agents
+agent_versions
+opencode_mode
+skills
+paths
+entries
+EOF
+
+  git clone -q "$remote" "$author"
+  git -C "$author" config user.email test@example.invalid
+  git -C "$author" config user.name 'Test Runner'
+  echo later > "$author/later"
+  git -C "$author" add later
+  git -C "$author" commit -qm later
+  git -C "$author" push -q
+
+  # An out-of-date checkout must say so without waiting for a skill invocation,
+  # which means fetching rather than trusting the local remote-tracking ref.
+  HOME="$home" "$project/bin/skill-x" status --json > "$TEST_ROOT/status-behind.json"
+  rg -q '"state": "behind"' "$TEST_ROOT/status-behind.json"
+  rg -q '"behind": 1' "$TEST_ROOT/status-behind.json"
+  rg -q '"update_available": true' "$TEST_ROOT/status-behind.json"
+  HOME="$home" "$project/bin/skill-x" status > "$TEST_ROOT/status-behind.txt"
+  rg -q '^  state         behind$' "$TEST_ROOT/status-behind.txt"
+
+  # A stale remote-tracking ref must not be able to hide the update.
+  git -C "$project" update-ref -d refs/remotes/origin/master 2>/dev/null || true
+  HOME="$home" "$project/bin/skill-x" status --json > "$TEST_ROOT/status-refetch.json"
+  rg -q '"state": "behind"' "$TEST_ROOT/status-refetch.json"
+}
+
+test_status_json_reports_unreachable_without_a_remote() {
+  local project="$TEST_ROOT/unreachable"
+  local home="$TEST_ROOT/unreachable-home"
+  copy_project "$project"
+  git -C "$project" init -q
+  git -C "$project" config user.email test@example.invalid
+  git -C "$project" config user.name 'Test Runner'
+  git -C "$project" add .
+  git -C "$project" commit -qm initial
+  HOME="$home" "$project/bin/skill-x" install --agents claude >/dev/null
+
+  HOME="$home" "$project/bin/skill-x" status --json > "$TEST_ROOT/status-unreachable.json"
+  rg -q '"state": "unreachable"' "$TEST_ROOT/status-unreachable.json"
+  rg -q '"state_reason": "no tracked upstream branch"' "$TEST_ROOT/status-unreachable.json"
+}
+
+test_update_refuses_dirty_and_diverged_checkouts() {
+  local project="$TEST_ROOT/update-safety"
+  local remote="$TEST_ROOT/update-safety.git"
+  local home="$TEST_ROOT/update-safety-home"
+  local author="$TEST_ROOT/update-safety-author"
+  make_installed_fixture "$project" "$remote" "$home" claude
+
+  git clone -q "$remote" "$author"
+  git -C "$author" config user.email test@example.invalid
+  git -C "$author" config user.name 'Test Runner'
+  echo upstream > "$author/upstream-file"
+  git -C "$author" add upstream-file
+  git -C "$author" commit -qm upstream
+  git -C "$author" push -q
+
+  local before scratch="$TEST_ROOT/update-safety-scratch"
+  mkdir -p "$scratch"
+  before=$(readlink "$home/.claude/skills/example-skill")
+
+  # An edit to a tracked file is what a fast-forward could conflict with.
+  echo scratch >> "$project/commands-src/example-skill/SKILL.md"
+  if HOME="$home" "$project/bin/skill-x" update --yes >/dev/null 2>"$scratch/dirty-error"; then
+    return 1
+  fi
+  rg -q 'refusing to update a dirty checkout' "$scratch/dirty-error"
+  [[ ! -e "$project/upstream-file" ]]
+  git -C "$project" checkout -q -- commands-src/example-skill/SKILL.md
+
+  # --check reports without touching anything, even when an update exists.
+  HOME="$home" "$project/bin/skill-x" update --check > "$scratch/check.txt"
+  rg -q 'Update available' "$scratch/check.txt"
+  [[ ! -e "$project/upstream-file" ]]
+
+  # Without a terminal there is nobody to ask, so an unconfirmed update fails.
+  if HOME="$home" "$project/bin/skill-x" update </dev/null >/dev/null 2>"$scratch/confirm-error"; then
+    return 1
+  fi
+  rg -q 'refusing to update without confirmation' "$scratch/confirm-error"
+
+  git -C "$project" commit -q --allow-empty -m 'local only'
+  if HOME="$home" "$project/bin/skill-x" update --yes >/dev/null 2>"$scratch/diverged-error"; then
+    return 1
+  fi
+  rg -q 'refusing to update a diverged checkout' "$scratch/diverged-error"
+  [[ ! -e "$project/upstream-file" ]]
+  [[ $(readlink "$home/.claude/skills/example-skill") == "$before" ]]
+}
+
+test_update_fast_forwards_and_refreshes_everything() {
+  local project="$TEST_ROOT/update-apply"
+  local remote="$TEST_ROOT/update-apply.git"
+  local home="$TEST_ROOT/update-apply-home"
+  local author="$TEST_ROOT/update-apply-author"
+  make_installed_fixture "$project" "$remote" "$home" claude,opencode
+
+  git clone -q "$remote" "$author"
+  git -C "$author" config user.email test@example.invalid
+  git -C "$author" config user.name 'Test Runner'
+  mkdir -p "$author/commands-src/added-skill"
+  cat > "$author/commands-src/added-skill/SKILL.md" <<'EOF'
+---
+name: added-skill
+description: fixture
+---
+
+body
+EOF
+  "$author/bin/build.sh" >/dev/null
+  git -C "$author" add -A
+  git -C "$author" commit -qm 'add added-skill'
+  git -C "$author" push -q
+
+  local state
+  state=$(dirname "$(manifest_of "$home")")
+  mkdir -p "$state"
+  : > "$state/last-check"
+  : > "$state/snooze-until"
+
+  HOME="$home" "$project/bin/skill-x" update --yes > "$TEST_ROOT/update-apply.txt" 2>&1
+  rg -q 'skills changed    added-skill' "$TEST_ROOT/update-apply.txt"
+
+  [[ -L "$home/.claude/skills/added-skill" ]]
+  [[ -L "$home/.config/opencode/commands/added-skill.md" ]]
+  [[ -f "$project/commands/added-skill/SKILL.md" ]]
+  # The update must leave no throttle or snooze state pretending to be current.
+  [[ ! -e "$state/last-check" && ! -e "$state/snooze-until" ]]
+  rg -q '"last_update": "2' "$(manifest_of "$home")"
+  HOME="$home" "$project/bin/skill-x" doctor --strict >/dev/null
+}
+
+test_uninstall_removes_managed_entries_only() {
+  local project="$TEST_ROOT/uninstall"
+  local home="$TEST_ROOT/uninstall-home"
+  copy_project "$project"
+  HOME="$home" "$project/bin/skill-x" install --agents claude,codex,opencode >/dev/null
+
+  # A user-owned directory that collides with a managed name, plus an unrelated
+  # skill and command that skill-x never touched.
+  rm "$home/.claude/skills/herdr"
+  mkdir -p "$home/.claude/skills/herdr" "$home/.claude/skills/user-skill"
+  echo mine > "$home/.claude/skills/herdr/SKILL.md"
+  echo mine > "$home/.claude/skills/user-skill/SKILL.md"
+  echo mine > "$home/.config/opencode/commands/user-command.md"
+
+  # Removing one agent keeps the manifest and the other agents intact.
+  HOME="$home" "$project/bin/skill-x" uninstall --agents codex --yes >/dev/null
+  [[ ! -e "$home/.agents/skills/example-skill" ]]
+  [[ ! -e "$home/.codex/skills/example-skill" ]]
+  [[ -L "$home/.claude/skills/example-skill" ]]
+  rg -q '"agents": \["claude", "opencode"\]' "$(manifest_of "$home")"
+
+  HOME="$home" "$project/bin/skill-x" uninstall --yes > "$project/uninstall.txt"
+
+  [[ ! -e "$home/.claude/skills/example-skill" ]]
+  [[ ! -e "$home/.config/opencode/skills/example-skill" ]]
+  [[ ! -e "$home/.config/opencode/commands/example-skill.md" ]]
+  # Everything the user owns survives, including the colliding name.
+  [[ $(cat "$home/.claude/skills/herdr/SKILL.md") == mine ]]
+  [[ $(cat "$home/.claude/skills/user-skill/SKILL.md") == mine ]]
+  [[ $(cat "$home/.config/opencode/commands/user-command.md") == mine ]]
+  rg -q 'preserved .*/.claude/skills/herdr' "$project/uninstall.txt"
+  # The checkout stays unless it is explicitly asked for.
+  [[ -f "$project/bin/skill-x" ]]
+  [[ -z $(manifest_of "$home") ]]
+}
+
+test_uninstall_refuses_to_delete_a_dirty_checkout() {
+  local project="$TEST_ROOT/uninstall-dirty"
+  local home="$TEST_ROOT/uninstall-dirty-home"
+  copy_project "$project"
+  "$project/bin/build.sh" >/dev/null
+  git -C "$project" init -q
+  git -C "$project" config user.email test@example.invalid
+  git -C "$project" config user.name 'Test Runner'
+  git -C "$project" add .
+  git -C "$project" commit -qm initial
+  HOME="$home" "$project/bin/skill-x" install --agents claude >/dev/null
+  echo scratch > "$project/uncommitted"
+
+  # Even an untracked file is enough: deleting the checkout would destroy it.
+  if HOME="$home" "$project/bin/skill-x" uninstall --yes --remove-checkout \
+      >/dev/null 2>"$TEST_ROOT/uninstall-dirty-error"; then
+    return 1
+  fi
+  rg -q 'refusing to delete a dirty checkout' "$TEST_ROOT/uninstall-dirty-error"
+  [[ -d "$project" ]]
+
+  rm "$project/uncommitted"
+  HOME="$home" "$project/bin/skill-x" uninstall --yes --remove-checkout >/dev/null
+  [[ ! -e "$project" ]]
+}
+
+test_update_state_is_namespaced_per_installation() {
+  local one="$TEST_ROOT/ns-one"
+  local two="$TEST_ROOT/ns-two"
+  local remote_one="$TEST_ROOT/ns-one.git"
+  local remote_two="$TEST_ROOT/ns-two.git"
+  local home="$TEST_ROOT/ns-home"
+  local author="$TEST_ROOT/ns-author"
+  make_git_fixture "$one" "$remote_one"
+  make_git_fixture "$two" "$remote_two"
+
+  advance() {
+    local remote=$1 clone=$2
+    git clone -q "$remote" "$clone"
+    git -C "$clone" config user.email test@example.invalid
+    git -C "$clone" config user.name 'Test Runner'
+    git -C "$clone" commit -q --allow-empty -m newer
+    git -C "$clone" push -q
+  }
+  advance "$remote_one" "$author-1"
+  advance "$remote_two" "$author-2"
+
+  [[ $(HOME="$home" SKILL_X_CHECK_INTERVAL_SECONDS=0 "$one/bin/update-check") == UPGRADE_AVAILABLE* ]]
+  HOME="$home" "$one/bin/snooze.sh" >/dev/null
+
+  # Snoozing one checkout must not silence an unrelated one.
+  [[ $(HOME="$home" SKILL_X_CHECK_INTERVAL_SECONDS=0 "$one/bin/update-check") == UP_TO_DATE ]]
+  [[ $(HOME="$home" SKILL_X_CHECK_INTERVAL_SECONDS=0 "$two/bin/update-check") == UPGRADE_AVAILABLE* ]]
+
+  # The check can be switched off entirely; the CLI stays authoritative.
+  [[ -z $(HOME="$home" SKILL_X_DISABLE_UPDATE_CHECK=1 SKILL_X_CHECK_INTERVAL_SECONDS=0 "$two/bin/update-check") ]]
+}
+
+test_cloud_bootstrap_does_not_copy_through_managed_symlinks() {
+  local project="$TEST_ROOT/cloud-symlink"
+  local remote="$TEST_ROOT/cloud-symlink.git"
+  local home="$TEST_ROOT/cloud-symlink-home"
+  make_git_fixture "$project" "$remote"
+  local ref
+  ref=$(git -C "$project" rev-parse HEAD)
+
+  # An interactive install in the same HOME leaves symlinks pointing back into
+  # the checkout; a pinned copy must replace them, never write through them.
+  HOME="$home" SKILL_X_AGENTS=claude,opencode "$project/bin/skill-x" install >/dev/null
+  echo 'CHECKOUT-SENTINEL' >> "$project/commands/example-skill/SKILL.md"
+  echo 'CHECKOUT-SENTINEL' >> "$project/opencode-commands/example-skill.md"
+
+  HOME="$home" SKILL_X_OPENCODE_VERSION=v1 \
+    "$project/bin/cloud-bootstrap.sh" "file://$remote" "$ref" >/dev/null 2>&1
+
+  rg -q 'CHECKOUT-SENTINEL' "$project/commands/example-skill/SKILL.md"
+  rg -q 'CHECKOUT-SENTINEL' "$project/opencode-commands/example-skill.md"
+  for path in \
+    .claude/skills/example-skill \
+    .config/opencode/skills/example-skill \
+    .config/opencode/commands/example-skill.md; do
+    [[ ! -L "$home/$path" ]]
+    [[ -e "$home/$path" ]]
+  done
+  ! rg -q 'CHECKOUT-SENTINEL' "$home/.claude/skills/example-skill/SKILL.md"
+  ! rg -q 'CHECKOUT-SENTINEL' "$home/.config/opencode/commands/example-skill.md"
+}
+
+test_cloud_bootstrap_v2_removes_pinned_v1_shims() {
+  local project="$TEST_ROOT/cloud-v2"
+  local remote="$TEST_ROOT/cloud-v2.git"
+  local home="$TEST_ROOT/cloud-v2-home"
+  local commands="$home/.config/opencode/commands"
+  make_git_fixture "$project" "$remote"
+  local ref
+  ref=$(git -C "$project" rev-parse HEAD)
+
+  HOME="$home" SKILL_X_OPENCODE_VERSION=v1 \
+    "$project/bin/cloud-bootstrap.sh" "file://$remote" "$ref" >/dev/null 2>&1
+  [[ -f "$commands/example-skill.md" && ! -L "$commands/example-skill.md" ]]
+  echo 'user owned' > "$commands/user-command.md"
+
+  # Rebuilding the image on a reused layer with OpenCode v2 must clear the
+  # pinned copies, or every skill shows up twice.
+  HOME="$home" SKILL_X_OPENCODE_VERSION=v2 \
+    "$project/bin/cloud-bootstrap.sh" "file://$remote" "$ref" >/dev/null 2>&1
+
+  [[ ! -e "$commands/example-skill.md" ]]
+  [[ ! -e "$commands/funny-text-rewriter.md" ]]
+  [[ $(cat "$commands/user-command.md") == 'user owned' ]]
+  [[ -f "$home/.config/opencode/skills/example-skill/SKILL.md" ]]
+}
+
 run_test 'build injects once and copies support files' test_build_injects_header_and_support_files
 run_test 'invalid build preserves previous deployment' test_build_rejects_invalid_frontmatter_without_destroying_output
 run_test 'build accepts crlf frontmatter' test_build_accepts_crlf_frontmatter
@@ -1173,6 +1596,20 @@ run_test 'xdh standalone planning is reusable' test_xdh_standalone_planning_is_r
 run_test 'xdh housekeeping spares runtime holding live work' test_xdh_housekeeping_spares_runtime_holding_live_work
 run_test 'new canonical consumer from targets.conf is synced locally' test_sync_new_canonical_consumer_from_targets_conf
 run_test 'cloud v2 bootstrap removes managed shims preserves user files' test_cloud_v2_bootstrap_removes_managed_shims_preserves_user_files
+
+run_test 'init installs only the selected agents' test_init_installs_only_selected_agents
+run_test 'install is idempotent and records a manifest' test_install_is_idempotent_and_records_a_manifest
+run_test 'install repairs a moved checkout' test_install_repairs_a_moved_checkout
+run_test 'sync drops deselected agents' test_sync_drops_deselected_agents
+run_test 'status reports behind with stable json' test_status_reports_behind_and_stable_json
+run_test 'status reports unreachable without an upstream' test_status_json_reports_unreachable_without_a_remote
+run_test 'update refuses dirty and diverged checkouts' test_update_refuses_dirty_and_diverged_checkouts
+run_test 'update fast-forwards and refreshes everything' test_update_fast_forwards_and_refreshes_everything
+run_test 'uninstall removes managed entries only' test_uninstall_removes_managed_entries_only
+run_test 'uninstall refuses to delete a dirty checkout' test_uninstall_refuses_to_delete_a_dirty_checkout
+run_test 'update state is namespaced per installation' test_update_state_is_namespaced_per_installation
+run_test 'cloud bootstrap never copies through managed symlinks' test_cloud_bootstrap_does_not_copy_through_managed_symlinks
+run_test 'cloud bootstrap v2 removes pinned v1 shims' test_cloud_bootstrap_v2_removes_pinned_v1_shims
 
 printf '\nRESULT: %d passed, %d failed\n' "$passed" "$failed"
 (( failed == 0 ))

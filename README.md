@@ -1,24 +1,61 @@
-# skill-x-starter
+# skill-x
 
-把同一組個人 `SKILL.md` 技能部署到 Claude Code、Codex CLI 與 OpenCode。內容以 private Git repository 為唯一來源；個人電腦使用 symlink 與可選更新，容器 image 則安裝固定版本的副本。
+把同一組個人 `SKILL.md` 技能部署到 Claude Code、Codex CLI 與 OpenCode。Git repository 是唯一來源；個人電腦使用 symlink 與可選更新，容器 image 則安裝固定版本的副本。
 
-## 安裝
+整個生命週期由一個入口 `bin/skill-x` 負責：安裝、檢視、更新、修復、移除都不需要讀腳本原始碼。
+
+## 五分鐘快速上手
 
 ```bash
-git clone <private-repo-url> ~/.skill-x-starter
-cd ~/.skill-x-starter
-./install.sh
+git clone https://github.com/wahengchang/skill-x.git ~/skill-x
+cd ~/skill-x
+./install.sh                 # 等同 bin/skill-x init
 ```
 
-安裝程式會建立部署版本並同步到：
+`init` 會偵測本機安裝了哪些 agent、讓你確認要部署的目標、建置技能、建立 symlink，最後印出每個 agent 的叫用語法與後續指令。非互動環境（CI、容器）請直接指定目標：
 
-- `~/.claude/skills/`
-- `~/.codex/skills/`
-- `~/.agents/skills/`（Codex 防禦性相容路徑）
-- `~/.config/opencode/skills/`
-- `~/.config/opencode/commands/`（僅 OpenCode v1，見下節）
+```bash
+bin/skill-x init --agents claude,codex
+```
 
-以 `bin/doctor.sh` 檢視同步狀態。Windows 若未開啟 symlink 權限，目前不支援自動退回複製模式。
+接著重新啟動各 agent（技能與 command 在啟動時載入），輸入 `/example-skill` 或 `$example-skill` 驗證。
+
+想確認安裝狀態：
+
+```bash
+bin/skill-x status           # 落後幾個 commit、選了哪些 agent、路徑是否健康
+bin/skill-x doctor           # 每個受管理路徑的逐項診斷
+```
+
+> 想用自己的 private fork：把上面的 clone URL 換成你的 repository 即可，其餘指令完全相同。認證由你的 Git 設定（SSH key 或 credential helper）負責，本專案的腳本不接收也不儲存憑證。
+
+## 指令總覽
+
+| 指令 | 用途 |
+| --- | --- |
+| `bin/skill-x init [--agents ...]` | 選擇目標 agent、建置、同步、驗證。互動時會先確認選擇。 |
+| `bin/skill-x install [--agents ...]` | 以既有選擇重新套用；可重複執行且冪等，也是搬移 checkout 後的修復指令。 |
+| `bin/skill-x sync [--agents ...]` | 只重建 symlink，不重新 build。 |
+| `bin/skill-x status [--json] [--no-fetch]` | 安裝狀態、更新狀態、agent 版本、路徑健康度。 |
+| `bin/skill-x doctor [--strict] [--json]` | 逐項檢查受管理路徑；`--strict` 在有問題時以非零結束。 |
+| `bin/skill-x update [--check] [--yes]` | 先 fetch，再預覽變更，最後 fast-forward。永不靜默更新。 |
+| `bin/skill-x uninstall [--agents ...] [--remove-checkout]` | 只移除本安裝記錄的項目。 |
+
+`install.sh`、`bin/sync-skills.sh`、`bin/doctor.sh`、`bin/apply-update.sh` 仍可使用，它們現在只是轉呼叫上面的指令。
+
+## 安裝目標與路徑
+
+只有被選到的 agent 會建立目錄；沒選的 agent 不會在家目錄留下任何東西。
+
+| Agent | 技能路徑 | 說明 |
+| --- | --- | --- |
+| `claude` | `~/.claude/skills/` | |
+| `codex` | `~/.agents/skills/` | 文件化的主要路徑 |
+| `codex` | `~/.codex/skills/` | 相容路徑，可用 `SKILL_X_CODEX_COMPAT=0` 關閉 |
+| `opencode` | `~/.config/opencode/skills/` | |
+| `opencode` | `~/.config/opencode/commands/` | 只有 OpenCode v1 需要，見下節 |
+
+同名衝突一律保守處理：既有的非 symlink 檔案只警告不覆蓋，`uninstall` 也不會刪除它們。
 
 ## 各工具的明確叫用方式
 
@@ -27,19 +64,80 @@ cd ~/.skill-x-starter
 | 工具 | 叫用方式 | 來源 |
 | --- | --- | --- |
 | Claude Code | `/<skill>` | `~/.claude/skills/<skill>/SKILL.md` 自動成為 slash command，不需額外檔案 |
-| Codex | `$<skill>`，或用 `/skills` 選單 | `~/.codex/skills/<skill>/SKILL.md`；已棄用的 custom prompts（`/prompts:<name>`）預設不安裝 |
+| Codex | `$<skill>`，或用 `/skills` 選單 | `~/.agents/skills/<skill>/SKILL.md`；已棄用的 custom prompts（`/prompts:<name>`）預設不安裝 |
 | OpenCode v1 | `/<skill>` | 由 `bin/build.sh` 產生、再 symlink 到 `~/.config/opencode/commands/<skill>.md` 的 command shim |
 | OpenCode v2 | `/<skill>` | 原生 skill slash 目錄；不安裝 shim，避免重複項目 |
 
 OpenCode v1 的 shim 是薄薄一層：它只叫 OpenCode 用 `skill` 工具載入 canonical skill 並轉送 `$ARGUMENTS`，不複製技能內容。技能內容的唯一來源仍是 `commands-src/<name>/SKILL.md`。
 
-版本偵測預設執行 `opencode --version`。偵測不到（例如 OpenCode 尚未安裝或不在 `PATH`）時視為 v1 並提示，可用環境變數強制指定：
+版本偵測預設執行 `opencode --version`。偵測不到（例如 OpenCode 尚未安裝或不在 `PATH`）時視為 v1 並提示，可用環境變數強制指定。從 v1 切換到 v2 時，`bin/skill-x sync` 會清掉自己產生的 shim，使用者自己寫的 command 檔案不受影響。
+
+## 安裝狀態（manifest）
+
+每個 checkout 都有自己的安裝記錄：
+
+```text
+~/.local/state/skill-x/<installation-id>/install.json
+```
+
+裡面記錄 repository URL、checkout 路徑、安裝的 commit、選擇的 agent 與偵測到的版本、解析出的 OpenCode 模式、技能清單、每一條受管理的 symlink 及其目標，以及最後一次成功的 install／sync／update 時間。`status`、`doctor`、`uninstall` 全部以它為準——所以 skill-x 只會移除自己建立的東西，也能在 checkout 被搬走時說出到底發生什麼事。
+
+installation id 存在 `.git/skill-x-install-id`，因此搬移或改名 checkout 之後仍是同一個安裝。更新提醒的節流與 snooze 狀態也放在同一個目錄，不同 checkout 之間互不干擾。
+
+## 更新
+
+```bash
+bin/skill-x update --check    # 只看會變什麼，不動任何東西
+bin/skill-x update            # 預覽後詢問；同意才套用
+bin/skill-x update --yes      # 非互動環境（已確認）
+```
+
+`update` 一定先 `git fetch` 追蹤中的 upstream 再判斷狀態，不會只比對本地的 remote-tracking ref。套用時只做 fast-forward，接著重新 build、同步選定的 agent、跑一次 doctor。
+
+安全規則：
+
+- 工作區有未 commit 的追蹤檔案變更 → 拒絕更新，已部署的技能維持原狀。
+- 本地與 upstream 分岔 → 拒絕更新，並提示先 rebase。
+- 沒有終端機可以詢問又沒有 `--yes` → 拒絕更新。
+
+技能執行前的更新檢查仍然存在（至多每小時一次 `git ls-remote`，發現更新時由 AI 詢問），但它只是提示；權威狀態一律以 `bin/skill-x status` 為準。可用 `SKILL_X_DISABLE_UPDATE_CHECK=1` 完全關掉。
+
+## 移除
+
+```bash
+bin/skill-x uninstall                      # 移除所有受管理項目，保留 checkout
+bin/skill-x uninstall --agents opencode    # 只移除某個 agent
+bin/skill-x uninstall --remove-checkout    # 連 checkout 一起刪除
+```
+
+只有 manifest 記錄、且現在仍指向預期目標的 symlink 會被刪除；使用者自己的技能、command、目錄與同名衝突檔案一律保留，並在輸出中列為 `preserved`。`--remove-checkout` 在 checkout 有未 commit 或未追蹤的內容時會直接拒絕，且拒絕時不會先移除任何東西。
+
+## 環境變數
 
 | 變數 | 預設值 | 用途 |
 | --- | --- | --- |
+| `SKILL_X_AGENTS` | 未設定 | 預設的 agent 選擇（`--agents` 優先） |
 | `SKILL_X_OPENCODE_VERSION` | `auto` | `auto`／`v1`（安裝 shim）／`v2`（改用原生 slash，並移除既有 shim） |
+| `SKILL_X_CODEX_COMPAT` | `1` | 設為 `0` 時不再同步 `~/.codex/skills` |
+| `SKILL_X_STATE_HOME` | `~/.local/state` | 安裝狀態的根目錄（也吃 `XDG_STATE_HOME`） |
+| `SKILL_X_STATE_DIR` | 未設定 | 指定單一狀態目錄（舊版配置） |
+| `SKILL_X_DISABLE_UPDATE_CHECK` | `0` | 設為 `1` 時停用技能執行前的更新檢查 |
+| `SKILL_X_CHECK_INTERVAL_SECONDS` | `3600` | 遠端檢查節流秒數 |
+| `SKILL_X_SNOOZE_DAYS` | `7` | 拒絕更新後延後天數 |
 
-撞名行為與技能同步一致：既有的非 symlink 檔案只警告不覆蓋，受管理的 symlink 可重複執行且冪等，技能刪除後對應的 shim 會被移除。從 v1 切換到 v2 時，`bin/sync-skills.sh` 會清掉自己產生的 shim，使用者自己寫的 command 檔案不受影響。
+## 疑難排解
+
+| 症狀 | 處理方式 |
+| --- | --- |
+| `doctor` 出現 `FOREIGN` | 該路徑不是 skill-x 建立的（你自己的技能或別的工具）。skill-x 不會覆蓋也不會刪除它；要讓 skill-x 接手，先自行改名或移除。 |
+| `doctor` 出現 `STALE` | symlink 還在，但目標不見了——通常是 checkout 被搬走或技能被刪除。跑 `bin/skill-x install` 重新指向。 |
+| `doctor` 出現 `MOVED` | manifest 記錄的 checkout 路徑與現在執行的位置不同。跑 `bin/skill-x install` 即可修復全部連結並更新 manifest。 |
+| `doctor` 出現 `ORPHAN` | 同一個家目錄裡還有別的安裝記錄，但它的 checkout 已經不存在。依照輸出的指令帶 `SKILL_X_STATE_DIR=` 移除該筆記錄。 |
+| `status` 顯示 `unreachable` | 不是 git checkout、沒有追蹤 upstream，或連不到遠端。`state_reason` 會說明是哪一種。 |
+| 更新被拒（dirty） | `git status --short` 看一下，commit 或 stash 之後再跑一次。未追蹤的檔案不會擋更新。 |
+| 更新被拒（diverged） | 本地有 upstream 沒有的 commit。先 `git rebase <upstream>`，再跑 `bin/skill-x update`。 |
+| OpenCode 版本判斷錯誤 | 偵測不到時會回退 v1 並在 stderr 說明。用 `SKILL_X_OPENCODE_VERSION=v1\|v2` 明確指定。 |
+| Windows 沒有 symlink 權限 | 目前不支援自動退回複製模式，需要 Developer Mode 或相應權限。 |
 
 ## 維護技能
 
@@ -51,7 +149,7 @@ OpenCode v1 的 shim 是薄薄一層：它只叫 OpenCode 用 `skill` 工具載�
 
 canonical skill 的唯一來源仍是 `commands-src/<name>/`；不要直接編輯產生的 `commands/`、`opencode-commands/`，也不要把這些 disposable artifact commit 進 repository（它們在 `.gitignore`）。建立或修改完成後執行 `bin/build.sh`，只需要 commit source 與 build 設定。若要手動撰寫或查看完整命名規則，請參考 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
-`canonicalize-skill` 是建置階段的 authoring tool，不是此 framework 的輸出；它不會進入 `commands/`，也不會由 `bin/sync-skills.sh` 分發到各 AI agents。framework 的輸入是 `commands-src/` 中完成 canonicalize 的 skill set，輸出才是跨 agents 使用的 generated skill set。
+`canonicalize-skill` 是建置階段的 authoring tool，不是此 framework 的輸出；它不會進入 `commands/`，也不會被分發到各 AI agents。framework 的輸入是 `commands-src/` 中完成 canonicalize 的 skill set，輸出才是跨 agents 使用的 generated skill set。
 
 支援檔案（例如 `scripts/`、`references/`）會一併複製。修改 `_shared/update-check-header.md` 後也必須重跑 `bin/build.sh`。
 
@@ -100,39 +198,31 @@ bin/doctor.sh                       # 確認技能已同步
 請使用 funny-text-rewriter 改寫：The meeting starts at 9 AM. Please don't be late.
 ```
 
-## 更新行為
-
-技能執行前至多每小時以 `git ls-remote` 檢查一次。發現更新時，AI 必須先詢問；同意才執行 `bin/apply-update.sh`。拒絕後預設七天不再詢問。可用以下環境變數調整：
-
-| 變數 | 預設值 | 用途 |
-| --- | ---: | --- |
-| `SKILL_X_CHECK_INTERVAL_SECONDS` | `3600` | 遠端檢查節流秒數 |
-| `SKILL_X_SNOOZE_DAYS` | `7` | 拒絕後延後天數 |
-| `SKILL_X_STATE_DIR` | `~/.skill-x-starter-state` | 本機狀態目錄 |
-
 ## 容器 / 雲端 image
 
 在 image build 階段執行：
 
 ```bash
-bin/cloud-bootstrap.sh <private-repo-url> <tag-or-commit>
+bin/cloud-bootstrap.sh <repo-url> <tag-or-commit>
 ```
 
 腳本會 checkout 指定 ref，**就地跑 `bin/build.sh` 產出 disposable artifact**，再把 canonical skill 複製到四個目標，最後視 OpenCode 版本決定要不要安裝 command shim。pinned ref 不需要夾帶 `commands/` 或 `opencode-commands/`——它們每次都從 source 重新產生。private repo 的 SSH agent、deploy key 或 BuildKit secret 應由你自己的建置環境提供，腳本不接收憑證。升級時改 ref 並重建 image。
 
 > 請使用不可變的 tag 或完整 commit SHA。一般 branch 名稱雖可被 Git 解析，並不符合可重現建置的目的。
 
+如果 image layer 或 HOME 是重複使用的，pinned 複製前會先解開自己建立的 symlink，避免 `cp` 穿過連結寫回原始 checkout；從 v1 切到 v2 時也會移除帶有 `skill-x-managed-command` 標記的 command 副本，使用者自有的 command 不受影響。
+
 ## 測試
 
-本專案附有不需要網路、也不會改動真實家目錄的整合測試。測試會在暫存目錄建立本機 bare Git remote，驗證 build、symlink、更新、snooze、fast-forward pull 與 pinned cloud copy：
+本專案附有不需要網路、也不會改動真實家目錄的整合測試。測試會在暫存目錄建立本機 bare Git remote 與暫存 HOME，驗證 build、symlink、安裝 manifest、status 狀態、更新安全性、修復、移除保留行為與 pinned cloud copy：
 
 ```bash
 make test
 ```
 
-測試結束時應顯示 `RESULT: 36 passed, 0 failed`。這能驗證 shell 腳本與檔案行為；Claude Code、Codex CLI、OpenCode 是否實際發現技能，以及 AI 是否依照自然語言指示詢問，仍需分別在三個工具做端到端人工 smoke test：
+測試結束時應顯示 `RESULT: 49 passed, 0 failed`。這能驗證 shell 腳本與檔案行為；Claude Code、Codex CLI、OpenCode 是否實際發現技能，以及 AI 是否依照自然語言指示詢問，仍需分別在三個工具做端到端人工 smoke test：
 
-1. 執行 `./install.sh` 與 `bin/doctor.sh`，確認四個技能路徑與 OpenCode command 區段皆為 `OK`。
+1. 執行 `./install.sh` 與 `bin/skill-x doctor`，確認選定的技能路徑與 OpenCode command 區段皆為 `OK`。
 2. 重新啟動三個工具（skills 與 commands 在啟動時載入）。
 3. Claude Code：輸入 `/example-skill`，確認技能內容被載入。
 4. Codex：輸入 `$example-skill`，再開 `/skills` 確認技能出現在清單。

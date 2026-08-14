@@ -15,6 +15,15 @@ git clone --quiet --no-checkout "$repo_url" "$tmp/repo"
 git -C "$tmp/repo" fetch --quiet --depth 1 origin "$ref"
 git -C "$tmp/repo" checkout --quiet --detach FETCH_HEAD
 
+# A reused HOME or image layer can still hold symlinks from an interactive
+# installation. Copying onto one would write through it into that checkout.
+unlink_managed_symlink() {
+  local dest=$1
+  [[ -L "$dest" ]] || return 0
+  rm "$dest"
+  echo "Replaced managed symlink with a pinned copy: $dest" >&2
+}
+
 # Generated artifacts are disposable on current refs. Historical refs may still
 # contain/build the legacy commands/ + opencode-commands/ layout; their own
 # build.sh remains the authority for recreating that pinned version.
@@ -47,7 +56,11 @@ legacy_deploy() {
 
   for target in "${targets[@]}"; do
     mkdir -p "$target"
-    cp -a "$canonical/." "$target/"
+    while IFS= read -r -d '' skill; do
+      dest="$target/$(basename "$skill")"
+      unlink_managed_symlink "$dest"
+      cp -a "$skill" "$target/"
+    done < <(find "$canonical" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
   done
 
   opencode_version=$("$ROOT/bin/opencode-version.sh")
@@ -91,7 +104,11 @@ canonical_deploy() {
     rel=${rel/#~/$HOME}
     target="$rel"
     mkdir -p "$target"
-    cp -a "$tmp/repo/$CANONICAL_DEST/." "$target/"
+    while IFS= read -r -d '' skill; do
+      dest="$target/$(basename "$skill")"
+      unlink_managed_symlink "$dest"
+      cp -a "$skill" "$target/"
+    done < <(find "$tmp/repo/$CANONICAL_DEST" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
   done
 }
 
