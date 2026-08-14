@@ -8,6 +8,7 @@
 commands-src ── build.sh ──> commands (committed)
                                 ├─ sync-skills.sh ─> local symlinks
                                 └─ cloud-bootstrap ─> pinned image copies
+             └─ build.sh ──> opencode-commands (committed v1 shims)
 ```
 
 ## 詞彙表
@@ -53,6 +54,8 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 
 `bin/sync-skills.sh` 防禦性同步四個個人層級路徑：Claude、OpenCode、`~/.codex/skills` 與 `~/.agents/skills`。遇到同名非 symlink 內容只警告而不覆蓋。之所以暫時保留兩個 Codex 路徑，是官方文件查詢在本次建置環境因 DNS/網路限制失敗，尚無法可靠裁決；應在真實 Codex CLI 跑 `bin/doctor.sh` 的步驟後回填並簡化。
 
+OpenCode v1 另外需要 `~/.config/opencode/commands/<name>.md` 才能明確以 slash command 呼叫。`bin/build.sh` 從 canonical skill 名稱產生只負責呼叫 `skill` tool 與轉送 `$ARGUMENTS` 的 shim；v2 使用原生 skill slash catalog。同步時優先使用 `SKILL_X_OPENCODE_VERSION`，否則偵測 CLI major version；無法判斷時不猜測並提示使用者指定。所有清理只碰指向此 checkout 產物的受管 symlink。
+
 ### 容器部署
 
 `bin/cloud-bootstrap.sh` 接受 repo URL 與 ref，在暫存 checkout 中取得該版本的 `commands/`，複製到四個目標。認證由 image builder 的 SSH agent/secret 負責，避免 token 進入參數、log 或 image layer。部署後只有技能副本，沒有 repository 腳本，因此嵌入的本地更新檢查自然無法執行且必須靜默繼續。
@@ -62,6 +65,7 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 ```text
 commands-src/                  手動編輯的作者版
 commands/                      build 產生、需 commit 的部署版
+opencode-commands/             build 產生、需 commit 的 OpenCode v1 command shims
 .codex/skills/canonicalize-skill/ Codex 建置環境專用的 raw skill authoring tool（不分發）
 _shared/update-check-header.md 共用更新與詢問指示
 bin/build.sh                   產生部署版
@@ -69,6 +73,7 @@ bin/update-check               節流遠端檢查
 bin/apply-update.sh            fast-forward 更新與重新同步
 bin/snooze.sh                  延後提醒
 bin/sync-skills.sh             個人電腦 symlink
+bin/opencode-version.sh        OpenCode major version override / detection
 bin/cloud-bootstrap.sh         image 固定版本複製
 bin/doctor.sh                  目標路徑診斷
 install.sh                     安裝入口

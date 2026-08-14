@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 SRC="$ROOT/commands-src"
 DEST="$ROOT/commands"
+COMMAND_DEST="$ROOT/opencode-commands"
 HEADER="$ROOT/_shared/update-check-header.md"
 
 [[ -f "$HEADER" ]] || { echo "Missing header: $HEADER" >&2; exit 1; }
@@ -14,7 +15,7 @@ found=0
 while IFS= read -r -d '' skill; do
   found=1
   rel=${skill#"$SRC/"}
-  out="$tmp/${rel%/SKILL.md}/SKILL.md"
+  out="$tmp/commands/${rel%/SKILL.md}/SKILL.md"
   mkdir -p "$(dirname "$out")"
   awk -v header="$HEADER" '
     { sub(/\r$/, "") }
@@ -40,11 +41,24 @@ while IFS= read -r -d '' skill; do
     mkdir -p "$out_dir/$(dirname "$support_rel")"
     cp -a "$support" "$out_dir/$support_rel"
   done < <(find "$skill_dir" -type f ! -name SKILL.md -print0)
+
+  name=$(basename "$(dirname "$skill")")
+  mkdir -p "$tmp/opencode-commands"
+  cat > "$tmp/opencode-commands/$name.md" <<EOF
+---
+description: Run the $name skill
+---
+
+Use the \`skill\` tool to load the canonical \`$name\` skill, then follow its instructions for this request:
+
+\$ARGUMENTS
+EOF
 done < <(find "$SRC" -mindepth 2 -maxdepth 2 -type f -name SKILL.md -print0 | sort -z)
 
 (( found )) || { echo "No skills found in $SRC" >&2; exit 1; }
 rm -rf "$DEST"
-mv "$tmp" "$DEST"
+mv "$tmp/commands" "$DEST"
+rm -rf "$COMMAND_DEST"
+mv "$tmp/opencode-commands" "$COMMAND_DEST"
 trap - EXIT
-echo "Built skills in $DEST"
-
+echo "Built skills in $DEST and OpenCode v1 shims in $COMMAND_DEST"

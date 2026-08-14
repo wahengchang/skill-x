@@ -50,11 +50,54 @@ EOF
   [[ $(rg -c '此區塊由 bin/build.sh' "$project/commands/demo/SKILL.md") -eq 1 ]]
   rg -q '^# Demo body$' "$project/commands/demo/SKILL.md"
   cmp "$project/commands-src/demo/scripts/helper.sh" "$project/commands/demo/scripts/helper.sh"
+  rg -q 'skill.*demo' "$project/opencode-commands/demo.md"
+  rg -q '^\$ARGUMENTS$' "$project/opencode-commands/demo.md"
+  ! rg -q '^# Demo body$' "$project/opencode-commands/demo.md"
 
   # A second build must be deterministic and must not inject the header twice.
   cp -a "$project/commands" "$project/first-build"
   "$project/bin/build.sh" >/dev/null
   diff -ru "$project/first-build" "$project/commands"
+}
+
+test_opencode_command_sync_handles_versions_and_lifecycle() {
+  local project="$TEST_ROOT/opencode-commands"
+  local home="$TEST_ROOT/opencode-commands-home"
+  copy_project "$project"
+  "$project/bin/build.sh" >/dev/null
+
+  SKILL_X_OPENCODE_VERSION=v1 HOME="$home" "$project/bin/sync-skills.sh" >/dev/null
+  local link="$home/.config/opencode/commands/example-skill.md"
+  [[ -L "$link" ]]
+  [[ $(readlink "$link") == "$project/opencode-commands/example-skill.md" ]]
+
+  # Re-sync is idempotent, and a user-owned collision is preserved.
+  SKILL_X_OPENCODE_VERSION=v1 HOME="$home" "$project/bin/sync-skills.sh" >/dev/null
+  rm "$link"
+  printf 'keep\n' > "$link"
+  SKILL_X_OPENCODE_VERSION=v1 HOME="$home" "$project/bin/sync-skills.sh" >/dev/null 2>"$project/warnings"
+  rg -q '^keep$' "$link"
+  rg -q 'skipping non-symlink path' "$project/warnings"
+
+  rm "$link"
+  SKILL_X_OPENCODE_VERSION=v1 HOME="$home" "$project/bin/sync-skills.sh" >/dev/null
+  rm -rf "$project/commands-src/example-skill"
+  "$project/bin/build.sh" >/dev/null
+  SKILL_X_OPENCODE_VERSION=v1 HOME="$home" "$project/bin/sync-skills.sh" >/dev/null
+  [[ ! -e "$link" ]]
+
+  mkdir -p "$project/commands-src/example-skill"
+  cat > "$project/commands-src/example-skill/SKILL.md" <<'EOF'
+---
+name: example-skill
+description: fixture
+---
+body
+EOF
+  "$project/bin/build.sh" >/dev/null
+  SKILL_X_OPENCODE_VERSION=v1 HOME="$home" "$project/bin/sync-skills.sh" >/dev/null
+  SKILL_X_OPENCODE_VERSION=v2 HOME="$home" "$project/bin/sync-skills.sh" >/dev/null
+  [[ ! -e "$link" ]]
 }
 
 test_build_rejects_invalid_frontmatter_without_destroying_output() {
@@ -213,7 +256,7 @@ test_cloud_bootstrap_copies_pinned_content() {
   local ref
   ref=$(git -C "$project" rev-parse HEAD)
 
-  HOME="$home" "$project/bin/cloud-bootstrap.sh" "file://$remote" "$ref" >/dev/null
+  SKILL_X_OPENCODE_VERSION=v1 HOME="$home" "$project/bin/cloud-bootstrap.sh" "file://$remote" "$ref" >/dev/null
   for path in \
     .claude/skills/example-skill \
     .codex/skills/example-skill \
@@ -222,6 +265,8 @@ test_cloud_bootstrap_copies_pinned_content() {
     [[ -f "$home/$path/SKILL.md" ]]
     [[ ! -L "$home/$path" ]]
   done
+  [[ -f "$home/.config/opencode/commands/example-skill.md" ]]
+  rg -q '^\$ARGUMENTS$' "$home/.config/opencode/commands/example-skill.md"
 }
 
 run_test 'build injects once and copies support files' test_build_injects_header_and_support_files
@@ -229,6 +274,7 @@ run_test 'invalid build preserves previous deployment' test_build_rejects_invali
 run_test 'build accepts crlf frontmatter' test_build_accepts_crlf_frontmatter
 run_test 'sync is idempotent and preserves collisions' test_sync_is_idempotent_and_preserves_collisions
 run_test 'sync removes links for deleted skills' test_sync_removes_links_for_deleted_skills
+run_test 'OpenCode command shims handle versions and lifecycle' test_opencode_command_sync_handles_versions_and_lifecycle
 run_test 'update check reports current, upgrade, and snooze states' test_update_check_states
 run_test 'update check fails open without a remote' test_update_check_fails_open_without_remote
 run_test 'apply update fast-forwards and resynchronizes' test_apply_update_fast_forwards_and_resyncs

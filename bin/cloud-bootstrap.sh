@@ -18,5 +18,11 @@ for target in "${targets[@]}"; do
   mkdir -p "$target"
   cp -a "$tmp/repo/commands/." "$target/"
 done
+opencode_version=$("$tmp/repo/bin/opencode-version.sh")
+if [[ "$opencode_version" == v1 ]]; then
+  mkdir -p "$HOME/.config/opencode/commands"
+  cp -a "$tmp/repo/opencode-commands/." "$HOME/.config/opencode/commands/"
+elif [[ "$opencode_version" == unknown ]]; then
+  echo "WARNING: OpenCode version unavailable; set SKILL_X_OPENCODE_VERSION=v1 or v2 to configure slash commands." >&2
+fi
 echo "Installed pinned skills from $ref."
-
