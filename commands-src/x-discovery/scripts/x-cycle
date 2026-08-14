@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $# -eq 2 ]] || { echo "Usage: x-cycle <slug> <title>" >&2; exit 2; }
+slug=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//')
+[[ -n $slug ]] || { echo "Slug must contain letters or numbers" >&2; exit 2; }
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$("$script_dir/x-paths" . --repo-root)
+active="$repo_root/.dev-hub/active"
+shopt -s nullglob
+matches=("$active"/*-"$slug")
+shopt -u nullglob
+if (( ${#matches[@]} == 1 )) && [[ -d ${matches[0]} ]]; then
+  directory=${matches[0]}
+  cycle=$(basename "$directory")
+else
+  cycle="cycle-$(date -u +%Y%m%d-%H%M)-$slug"
+  directory="$active/$cycle"
+fi
+mkdir -p "$directory/artifacts/discovery" "$directory/work-items" "$directory/work-groups" "$directory/tmp"
+
+if [[ ! -f $directory/hub.md ]]; then
+  temporary=$(mktemp "$directory/tmp/hub.XXXXXX")
+  trap 'rm -f "$temporary"' EXIT
+  cp "$script_dir/../templates/cycle-hub.md" "$temporary"
+  TITLE=$2 CYCLE=$cycle NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+    perl -0pi -e 's/<title>/$ENV{TITLE}/g; s/cycle-YYYYMMDD-HHmm-<slug>/$ENV{CYCLE}/g; s/<ISO-8601>/$ENV{NOW}/g' "$temporary"
+  mv "$temporary" "$directory/hub.md"
+fi
+printf '%s\n' "$directory"

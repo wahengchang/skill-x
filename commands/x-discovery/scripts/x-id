@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $# -eq 3 ]] || { echo "Usage: x-id <directory> <prefix> <slug>" >&2; exit 2; }
+directory=$1
+prefix=$2
+slug=$3
+[[ $prefix =~ ^(WK|IS|SP|WG|RV|DBG)$ ]] || { echo "Unsupported prefix: $prefix" >&2; exit 2; }
+[[ $slug =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { echo "Invalid slug: $slug" >&2; exit 2; }
+mkdir -p "$directory"
+reservations="$directory/.x-id-reservations"
+mkdir -p "$reservations"
+
+if [[ $prefix == WK ]]; then
+  for number in $(seq -w 1 999); do
+    if mkdir "$reservations/$prefix-$number" 2>/dev/null; then
+      printf '%s\n' "$prefix-$number"
+      exit 0
+    fi
+  done
+  echo "No available $prefix IDs" >&2
+  exit 1
+fi
+
+for number in $(seq -w 1 999); do
+  reservation="$reservations/$prefix-$number"
+  if find "$directory" -maxdepth 1 -type f -name "$prefix-$number-*.md" -print -quit | grep -q .; then
+    continue
+  fi
+  mkdir "$reservation" 2>/dev/null || continue
+  path="$directory/$prefix-$number-$slug.md"
+  if (set -C; : > "$path") 2>/dev/null; then
+    printf '%s\n%s\n' "$prefix-$number" "$path"
+    exit 0
+  fi
+  rmdir "$reservation"
+done
+
+echo "No available $prefix IDs" >&2
+exit 1

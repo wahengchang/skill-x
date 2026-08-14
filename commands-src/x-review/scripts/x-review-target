@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $# -le 2 ]] || { echo "Usage: x-review-target [--commit <target>]" >&2; exit 2; }
+repo=$(git rev-parse --show-toplevel)
+
+if [[ ${1:-} == --commit ]]; then
+  [[ $# -eq 2 ]] || { echo "Usage: x-review-target --commit <target>" >&2; exit 2; }
+  tree=$(git -C "$repo" rev-parse --verify "$2^{tree}")
+  printf 'tree %s\n' "$tree" | shasum -a 256 | awk '{print $1}'
+  exit 0
+fi
+
+[[ $# -eq 0 ]] || { echo "Usage: x-review-target [--commit <target>]" >&2; exit 2; }
+
+# Build the final reviewable tree in a project-local temporary index. This uses
+# the same tree OID representation as --commit and includes untracked files.
+runtime="$repo/.dev-hub/runtime"
+mkdir -p "$runtime"
+temporary=$(mktemp -d "$runtime/x-review-index.XXXXXX")
+trap 'rm -rf "$temporary"' EXIT
+index="$temporary/index"
+export GIT_INDEX_FILE="$index"
+git -C "$repo" read-tree HEAD
+git -C "$repo" rm -r --cached --ignore-unmatch -- \
+  .dev-hub/active .dev-hub/runtime .dev-hub/worktrees >/dev/null 2>&1 || true
+git -C "$repo" add -A -- . \
+  ':(exclude).dev-hub/active/**' \
+  ':(exclude).dev-hub/runtime/**' \
+  ':(exclude).dev-hub/worktrees/**'
+tree=$(git -C "$repo" write-tree)
+printf 'tree %s\n' "$tree" | shasum -a 256 | awk '{print $1}'

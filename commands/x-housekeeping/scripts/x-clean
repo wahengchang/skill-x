@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+remove=false
+if [[ ${1:-} == --remove ]]; then
+  remove=true
+  shift
+fi
+[[ $# -eq 3 ]] || { echo "Usage: x-clean [--remove] <worktree> <branch> <integration-target>" >&2; exit 2; }
+worktree=$1
+branch=$2
+target=$3
+
+[[ -d $worktree ]] || { echo "Refusing: worktree does not exist" >&2; exit 1; }
+worktree_root=$(git -C "$worktree" rev-parse --show-toplevel)
+common_dir=$(git -C "$worktree" rev-parse --path-format=absolute --git-common-dir)
+repo=$(cd "$(dirname "$common_dir")" && pwd -P)
+[[ $worktree_root != "$repo" ]] || { echo "Refusing: main checkout is not a cleanup candidate" >&2; exit 1; }
+git -C "$repo" rev-parse --verify "refs/heads/$branch" >/dev/null || { echo "Refusing: local branch does not exist" >&2; exit 1; }
+target_commit=$(git -C "$repo" rev-parse --verify "$target^{commit}") || { echo "Refusing: integration target does not exist" >&2; exit 1; }
+branch_commit=$(git -C "$repo" rev-parse "refs/heads/$branch")
+[[ -z $(git -C "$worktree" status --porcelain) ]] || { echo "Refusing: worktree is dirty" >&2; exit 1; }
+[[ $(git -C "$worktree" branch --show-current) == "$branch" ]] || { echo "Refusing: worktree does not check out candidate branch" >&2; exit 1; }
+
+while IFS= read -r active_worktree; do
+  [[ $active_worktree == "$worktree_root" || $(git -C "$active_worktree" branch --show-current) != "$branch" ]] || {
+    echo "Refusing: branch is active in a worktree" >&2
+    exit 1
+  }
+done < <(git -C "$repo" worktree list --porcelain | awk '/^worktree / {print substr($0, 10)}')
+
+[[ $branch_commit != "$target_commit" ]] || { echo "Refusing: branch is the integration target" >&2; exit 1; }
+git -C "$repo" merge-base --is-ancestor "$branch_commit" "$target_commit" || {
+  echo "Refusing: branch is not strictly integrated into target" >&2
+  exit 1
+}
+
+if $remove; then
+  git -C "$repo" worktree remove "$worktree"
+  git -C "$repo" branch -d "$branch"
+  git -C "$repo" worktree prune
+fi
+printf 'safe-remove %s %s into %s\n' "$worktree" "$branch" "$target"

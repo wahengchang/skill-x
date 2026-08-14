@@ -389,6 +389,94 @@ test_cloud_bootstrap_installs_command_shims() {
   [[ -f "$home_v2/.config/opencode/skills/example-skill/SKILL.md" ]]
 }
 
+test_x_skills_build_and_helpers() {
+  local project="$TEST_ROOT/x-skills"
+  copy_project "$project"
+  "$project/bin/build.sh" >/dev/null
+
+  local skills=(x-debug x-discovery x-housekeeping x-plan-eng x-review x-ship)
+  local skill
+  for skill in "${skills[@]}"; do
+    [[ -f "$project/commands-src/$skill/SKILL.md" ]]
+    [[ -f "$project/commands/$skill/SKILL.md" ]]
+    [[ -f "$project/opencode-commands/$skill.md" ]]
+  done
+  [[ $(find "$project/commands-src" -mindepth 1 -maxdepth 1 -type d -name 'x-*' | wc -l | tr -d ' ') -eq 6 ]]
+  [[ -f "$project/commands/x-discovery/templates/cycle-hub.md" ]]
+  [[ -f "$project/commands/x-plan-eng/templates/issue.md" ]]
+  [[ -f "$project/commands/x-review/templates/review-result.md" ]]
+  [[ -f "$project/commands/x-debug/templates/debug-report.md" ]]
+  [[ -f "$project/commands/x-housekeeping/templates/cycle-log.md" ]]
+
+  git -C "$project" init -q
+  git -C "$project" config user.email test@example.invalid
+  git -C "$project" config user.name 'Test Runner'
+  git -C "$project" add .
+  git -C "$project" commit -qm initial
+
+  local fingerprint
+  fingerprint=$(cd "$project" && "$project/commands-src/x-review/scripts/x-review-target")
+  local committed_fingerprint
+  committed_fingerprint=$(cd "$project" && "$project/commands-src/x-review/scripts/x-review-target" --commit HEAD)
+  [[ $fingerprint == "$committed_fingerprint" ]]
+
+  [[ $("$project/commands-src/x-discovery/scripts/x-paths" "$project" --repo-root) == "$project" ]]
+  local cycle
+  cycle=$(cd "$project" && "$project/commands-src/x-discovery/scripts/x-cycle" release-cycle 'Release cycle')
+  [[ -f "$cycle/hub.md" ]]
+  ! rg -q '<title>|cycle-YYYYMMDD-HHmm-<slug>|<ISO-8601>' "$cycle/hub.md"
+  [[ $(cd "$project" && "$project/commands-src/x-discovery/scripts/x-cycle" release-cycle 'Release cycle') == "$cycle" ]]
+  touch "$cycle/work-items/IS-001-existing.md"
+  local allocated
+  allocated=$("$project/commands-src/x-discovery/scripts/x-id" "$cycle/work-items" IS alpha)
+  [[ ${allocated%%$'\n'*} == IS-002 ]]
+  [[ ${allocated#*$'\n'} == "$cycle/work-items/IS-002-alpha.md" ]]
+  [[ -f "${allocated#*$'\n'}" ]]
+  allocated=$("$project/commands-src/x-discovery/scripts/x-id" "$cycle/work-items" IS beta)
+  [[ ${allocated%%$'\n'*} == IS-003 ]]
+  [[ ${allocated#*$'\n'} == "$cycle/work-items/IS-003-beta.md" ]]
+  [[ $("$project/commands-src/x-discovery/scripts/x-id" "$cycle/work-items" WK candidate) == WK-001 ]]
+  ! find "$cycle/work-items" -maxdepth 1 -type f -name 'WK-*.md' -print -quit | grep -q .
+  git -C "$project" add .dev-hub
+  git -C "$project" commit -qm cycle
+
+  fingerprint=$(cd "$project" && "$project/commands-src/x-review/scripts/x-review-target")
+  [[ $fingerprint =~ ^[0-9a-f]{64}$ ]]
+  printf 'first final content\n' > "$project/fingerprint-test"
+  local changed_fingerprint
+  changed_fingerprint=$(cd "$project" && "$project/commands-src/x-review/scripts/x-review-target")
+  [[ $fingerprint != "$changed_fingerprint" ]]
+  printf 'second final content\n' > "$project/fingerprint-test"
+  local changed_again_fingerprint
+  changed_again_fingerprint=$(cd "$project" && "$project/commands-src/x-review/scripts/x-review-target")
+  [[ $changed_fingerprint != "$changed_again_fingerprint" ]]
+  rm "$project/fingerprint-test"
+
+  local main_branch
+  main_branch=$(git -C "$project" branch --show-current)
+  if (cd "$project" && "$project/commands-src/x-housekeeping/scripts/x-clean" "$project" "$main_branch" "$main_branch") >/dev/null 2>&1; then
+    return 1
+  fi
+  git -C "$project" branch cleanup-candidate HEAD~1
+  local cleanup_worktree="$TEST_ROOT/x-skills-cleanup"
+  git -C "$project" worktree add -q "$cleanup_worktree" cleanup-candidate
+  if "$project/commands-src/x-housekeeping/scripts/x-clean" "$project" cleanup-candidate "$main_branch" >/dev/null 2>&1; then
+    return 1
+  fi
+  "$project/commands-src/x-housekeeping/scripts/x-clean" "$cleanup_worktree" cleanup-candidate "$main_branch"
+  git -C "$project" worktree remove "$cleanup_worktree"
+  local unmerged_worktree="$TEST_ROOT/x-skills-unmerged"
+  git -C "$project" branch unmerged
+  git -C "$project" worktree add -q "$unmerged_worktree" unmerged
+  printf 'unmerged\n' > "$unmerged_worktree/unmerged"
+  git -C "$unmerged_worktree" add unmerged
+  git -C "$unmerged_worktree" commit -qm unmerged
+  if "$project/commands-src/x-housekeeping/scripts/x-clean" "$unmerged_worktree" unmerged "$main_branch" >/dev/null 2>&1; then
+    return 1
+  fi
+  git -C "$project" worktree remove --force "$unmerged_worktree"
+}
+
 run_test 'build injects once and copies support files' test_build_injects_header_and_support_files
 run_test 'invalid build preserves previous deployment' test_build_rejects_invalid_frontmatter_without_destroying_output
 run_test 'build accepts crlf frontmatter' test_build_accepts_crlf_frontmatter
@@ -404,6 +492,7 @@ run_test 'update check fails open without a remote' test_update_check_fails_open
 run_test 'apply update fast-forwards and resynchronizes' test_apply_update_fast_forwards_and_resyncs
 run_test 'cloud bootstrap installs copies from a pinned ref' test_cloud_bootstrap_copies_pinned_content
 run_test 'cloud bootstrap installs pinned command shims' test_cloud_bootstrap_installs_command_shims
+run_test 'x skills build and helper contracts' test_x_skills_build_and_helpers
 
 printf '\nRESULT: %d passed, %d failed\n' "$passed" "$failed"
 (( failed == 0 ))
