@@ -6,7 +6,10 @@
 
 ```text
 commands-src ── build.sh ──> commands (committed)
-                                ├─ sync-skills.sh ─> local symlinks
+                     │          ├─ sync-skills.sh ─> local symlinks
+                     │          └─ cloud-bootstrap ─> pinned image copies
+                     └──────> opencode-commands (committed, OpenCode v1 shims)
+                                ├─ sync-skills.sh ─> ~/.config/opencode/commands
                                 └─ cloud-bootstrap ─> pinned image copies
 ```
 
@@ -19,25 +22,34 @@ commands-src ── build.sh ──> commands (committed)
 | **canonical skill** | canonicalize 的結果；位於 `commands-src/<name>/SKILL.md`，是技能內容的單一來源。 |
 | **sync / distribute** | 既有 `bin/build.sh` 與 `bin/sync-skills.sh` 負責的建置及分發流程。目前三個目標工具皆讀取 `SKILL.md`，不需要格式轉換。 |
 | **generated skill** | 產生於 `commands/<name>/SKILL.md`、再 symlink 到各工具的部署副本。 |
+| **command shim** | 產生於 `opencode-commands/<name>.md` 的薄層 command 檔，只為 OpenCode v1 補上 `/<name>`；它叫 OpenCode 用 `skill` 工具載入 canonical skill，不含技能內容。 |
 
 raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 產生 canonical skill，之後才進入既有 build 與 sync 流程。canonicalizer 是 framework 的開發工具，不是 canonical skill set 的成員，因此不會建置到 `commands/` 或分發給各 AI agents。v1 不做近似重複的自動偵測；來源專案或原始 prompt 也不強制寫入，以免為單人維護增加不必要的 metadata。
 
 ## 關鍵決策
 
 1. **共同格式**：一個技能一個資料夾，以含 YAML frontmatter 的 `SKILL.md` 作為三個工具的最大公約數。
-2. **內容一致**：暫不為工具分支；真正出現差異需求時才加入條件或子目錄。
+2. **內容一致**：暫不為工具分支；真正出現差異需求時才加入條件或子目錄。技能**內容**不分支，只有「叫用管道」按工具補齊（決策 #9）。
 3. **自建分發**：不使用單一工具的 marketplace，以一致的 update-check、詢問與 symlink 流程換取跨工具一致體驗。
 4. **按需檢查**：技能呼叫時檢查，預設一小時節流，不執行 daemon。
 5. **更新需同意**：個人電腦永不靜默更新；拒絕後預設延後七天。
 6. **不可變 image**：build 時由使用者自己的 CI/建置環境提供 private repo 認證，固定 ref 並複製檔案；runtime 不依賴 Git。
 7. **作者版與部署版都入庫**：其他機器 pull 後不必具備 build 工具鏈即可同步。
 8. **雙版本節奏**：個人電腦 rolling，image pinned。
+9. **叫用管道按工具補齊**：Claude Code 與 Codex 從 skills 目錄自動產生 `/<skill>` 與 `$<skill>`，OpenCode v2 也有原生 slash 目錄，只有 OpenCode v1 需要額外的 command 檔案。因此只為 v1 產生 shim，其餘工具不產生任何重複項目，也不安裝 Codex 已棄用的 custom prompts。
 
 ## 核心機制
 
 ### Build
 
-`bin/build.sh` 要求 `SKILL.md` 第一行為 `---`，在第二個 `---` 後插入 `_shared/update-check-header.md`，並原樣複製其他支援檔。它先在暫存目錄完成全部輸出，再替換 `commands/`，避免半成品。
+`bin/build.sh` 要求 `SKILL.md` 第一行為 `---`，在第二個 `---` 後插入 `_shared/update-check-header.md`，並原樣複製其他支援檔。同時為每顆技能產生 `opencode-commands/<name>.md` shim，`description` 取自 canonical frontmatter。它先在暫存目錄完成全部輸出，再一次替換 `commands/` 與 `opencode-commands/`，避免半成品。
+
+### 明確叫用（command shim）
+
+各工具的顯式叫用語法整理在 README 的能力對照表。實作面只有兩件事：
+
+- shim 內容刻意極薄——指示 OpenCode 用 `skill` 工具載入 canonical skill、轉送 `$ARGUMENTS`，並帶一個 `skill-x-managed-command` 標記。技能內容不複製，避免出現第二份會過期的指示。
+- `bin/opencode-version.sh` 解析 `opencode --version` 的主版號決定 v1／v2，`SKILL_X_OPENCODE_VERSION=auto|v1|v2` 可覆寫。偵測失敗時回退 v1 並在 stderr 說明；v1 安裝 shim symlink，v2 反向移除自己產生的 shim，兩者都不動使用者自有的 command 檔案。
 
 ### 更新檢查
 
@@ -51,7 +63,7 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 
 ### 同步路徑
 
-`bin/sync-skills.sh` 防禦性同步四個個人層級路徑：Claude、OpenCode、`~/.codex/skills` 與 `~/.agents/skills`。遇到同名非 symlink 內容只警告而不覆蓋。之所以暫時保留兩個 Codex 路徑，是官方文件查詢在本次建置環境因 DNS/網路限制失敗，尚無法可靠裁決；應在真實 Codex CLI 跑 `bin/doctor.sh` 的步驟後回填並簡化。
+`bin/sync-skills.sh` 防禦性同步四個個人層級路徑：Claude、OpenCode、`~/.codex/skills` 與 `~/.agents/skills`，並在 OpenCode v1 時額外同步 `~/.config/opencode/commands`。遇到同名非 symlink 內容只警告而不覆蓋。之所以暫時保留兩個 Codex 路徑，是官方文件查詢在本次建置環境因 DNS/網路限制失敗，尚無法可靠裁決；應在真實 Codex CLI 跑 `bin/doctor.sh` 的步驟後回填並簡化。
 
 ### 容器部署
 
@@ -62,6 +74,7 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 ```text
 commands-src/                  手動編輯的作者版
 commands/                      build 產生、需 commit 的部署版
+opencode-commands/             build 產生、需 commit 的 OpenCode v1 command shim
 .codex/skills/canonicalize-skill/ Codex 建置環境專用的 raw skill authoring tool（不分發）
 _shared/update-check-header.md 共用更新與詢問指示
 bin/build.sh                   產生部署版
@@ -69,6 +82,7 @@ bin/update-check               節流遠端檢查
 bin/apply-update.sh            fast-forward 更新與重新同步
 bin/snooze.sh                  延後提醒
 bin/sync-skills.sh             個人電腦 symlink
+bin/opencode-version.sh        OpenCode v1/v2 判定與覆寫
 bin/cloud-bootstrap.sh         image 固定版本複製
 bin/doctor.sh                  目標路徑診斷
 install.sh                     安裝入口
@@ -82,7 +96,8 @@ tests/run.sh                   不需網路的整合測試
 3. **自然語言詢問（中）**：各工具互動能力不同，無法由 shell 測試完全保證。
 4. **無簽章驗證（低）**：信任 private origin；雲端應 pin commit，未驗證 commit signature。
 5. **狀態無鎖（低）**：同時呼叫可能競爭寫入 timestamp，但個人使用影響有限。
-6. **跨機與三工具實測待補**：優先測 pull、拒絕/snooze、重新啟動後技能發現。
+6. **跨機與三工具實測待補**：優先測 pull、拒絕/snooze、重新啟動後技能發現與 `/`、`$` 叫用。
+7. **OpenCode 版本判定是啟發式（中）**：只讀 `opencode --version` 的主版號，偵測不到時回退 v1。同一台機器裝多個 OpenCode 版本或版本字串改格式時，須用 `SKILL_X_OPENCODE_VERSION` 明確指定。
 
 ## 未採用方案
 

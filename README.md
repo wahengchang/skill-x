@@ -16,8 +16,30 @@ cd ~/.skill-x-starter
 - `~/.codex/skills/`
 - `~/.agents/skills/`（Codex 防禦性相容路徑）
 - `~/.config/opencode/skills/`
+- `~/.config/opencode/commands/`（僅 OpenCode v1，見下節）
 
 以 `bin/doctor.sh` 檢視同步狀態。Windows 若未開啟 symlink 權限，目前不支援自動退回複製模式。
+
+## 各工具的明確叫用方式
+
+同一顆技能在三個工具的顯式叫用語法不同：
+
+| 工具 | 叫用方式 | 來源 |
+| --- | --- | --- |
+| Claude Code | `/<skill>` | `~/.claude/skills/<skill>/SKILL.md` 自動成為 slash command，不需額外檔案 |
+| Codex | `$<skill>`，或用 `/skills` 選單 | `~/.codex/skills/<skill>/SKILL.md`；已棄用的 custom prompts（`/prompts:<name>`）預設不安裝 |
+| OpenCode v1 | `/<skill>` | 由 `bin/build.sh` 產生、再 symlink 到 `~/.config/opencode/commands/<skill>.md` 的 command shim |
+| OpenCode v2 | `/<skill>` | 原生 skill slash 目錄；不安裝 shim，避免重複項目 |
+
+OpenCode v1 的 shim 是薄薄一層：它只叫 OpenCode 用 `skill` 工具載入 canonical skill 並轉送 `$ARGUMENTS`，不複製技能內容。技能內容的唯一來源仍是 `commands-src/<name>/SKILL.md`。
+
+版本偵測預設執行 `opencode --version`。偵測不到（例如 OpenCode 尚未安裝或不在 `PATH`）時視為 v1 並提示，可用環境變數強制指定：
+
+| 變數 | 預設值 | 用途 |
+| --- | --- | --- |
+| `SKILL_X_OPENCODE_VERSION` | `auto` | `auto`／`v1`（安裝 shim）／`v2`（改用原生 slash，並移除既有 shim） |
+
+撞名行為與技能同步一致：既有的非 symlink 檔案只警告不覆蓋，受管理的 symlink 可重複執行且冪等，技能刪除後對應的 shim 會被移除。從 v1 切換到 v2 時，`bin/sync-skills.sh` 會清掉自己產生的 shim，使用者自己寫的 command 檔案不受影響。
 
 ## 維護技能
 
@@ -71,6 +93,13 @@ bin/cloud-bootstrap.sh <private-repo-url> <tag-or-commit>
 make test
 ```
 
-測試結束時應顯示 `RESULT: 7 passed, 0 failed`。這能驗證 shell 腳本與檔案行為；Claude Code、Codex CLI、OpenCode 是否實際發現技能，以及 AI 是否依照自然語言指示詢問，仍需分別在三個工具做端到端人工 smoke test。
+測試結束時應顯示 `RESULT: 15 passed, 0 failed`。這能驗證 shell 腳本與檔案行為；Claude Code、Codex CLI、OpenCode 是否實際發現技能，以及 AI 是否依照自然語言指示詢問，仍需分別在三個工具做端到端人工 smoke test：
+
+1. 執行 `./install.sh` 與 `bin/doctor.sh`，確認四個技能路徑與 OpenCode command 區段皆為 `OK`。
+2. 重新啟動三個工具（skills 與 commands 在啟動時載入）。
+3. Claude Code：輸入 `/example-skill`，確認技能內容被載入。
+4. Codex：輸入 `$example-skill`，再開 `/skills` 確認技能出現在清單。
+5. OpenCode：輸入 `/example-skill`。v1 應看到它透過 `skill` 工具載入 canonical skill；v2 應只出現一個項目，沒有重複。
+6. 帶參數再試一次（例如 `/funny-text-rewriter 明天九點開會`），確認 `$ARGUMENTS` 有被轉送。
 
 測試腳本另外需要 [`ripgrep`](https://github.com/BurntSushi/ripgrep)（`rg` 指令）來比對輸出，執行 `make test` 前請確認已安裝（例如 `brew install ripgrep` 或 `apt install ripgrep`）。

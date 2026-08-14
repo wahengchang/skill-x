@@ -4,15 +4,16 @@
 
 ---
 
-## 1. 心智模型：先搞清楚三個資料夾
+## 1. 心智模型：先搞清楚這幾個資料夾
 
 | 資料夾 | 你會做什麼 |
 |---|---|
 | `commands-src/<name>/SKILL.md` | **唯一手動編輯的地方**。乾淨的技能內容，不含更新檢查樣板文字。 |
 | `commands/<name>/SKILL.md` | `bin/build.sh` 產生的部署版本（frontmatter 之後多了 `_shared/update-check-header.md` 的內容）。**永遠不要手動改這裡**，改了下次 build 會被覆蓋。 |
+| `opencode-commands/<name>.md` | `bin/build.sh` 產生的 OpenCode v1 command shim，讓技能可用 `/<name>` 叫用。同樣**不要手動改**。 |
 | `~/.claude/skills/`、`~/.codex/skills/` 等 | `bin/sync-skills.sh` 把 `commands/` symlink 過去的地方，AI 工具實際讀取的路徑。 |
 
-一句話：**改 `commands-src/` → `bin/build.sh` 重新產生 `commands/` → commit 兩個資料夾 → push**。
+一句話：**改 `commands-src/` → `bin/build.sh` 重新產生 `commands/` 與 `opencode-commands/` → 三個資料夾一起 commit → push**。
 
 ---
 
@@ -46,10 +47,10 @@ make test
 
 # 6. 本機同步一次，實際用用看（可選但建議）
 bin/sync-skills.sh
-bin/doctor.sh          # 確認四個目標路徑都連結成功
+bin/doctor.sh          # 確認四個技能路徑與 OpenCode command 區段都連結成功
 
-# 7. commit 兩個資料夾一起進去，push
-git add commands-src/<skill-name> commands/<skill-name>
+# 7. 三個資料夾一起 commit，push
+git add commands-src/<skill-name> commands/<skill-name> opencode-commands/<skill-name>.md
 git commit -m "add <skill-name> skill"
 git push
 ```
@@ -67,21 +68,21 @@ mkdir -p commands-src/myapp-deploy commands-src/myapp-rollback commands-src/myap
 # 分別寫好三份 SKILL.md ...
 bin/build.sh
 make test
-git add commands-src commands
+git add commands-src commands opencode-commands
 git commit -m "add myapp-* skill set (deploy, rollback, status)"
 git push
 ```
 
 ### 修改既有技能 / 修改共用的更新檢查邏輯
 
-- 改某顆技能：直接改 `commands-src/<name>/SKILL.md`，一樣跑 `bin/build.sh` + `make test` + commit 兩個資料夾。
-- 改 `_shared/update-check-header.md`（會影響**所有**技能）：改完必須跑一次 `bin/build.sh` 讓全部技能重新套用，然後把 `commands/` 底下所有受影響的變動一併 commit——不要只 commit `_shared/`，不然部署版本會跟原始碼脫節。
+- 改某顆技能：直接改 `commands-src/<name>/SKILL.md`，一樣跑 `bin/build.sh` + `make test` + commit 三個資料夾。
+- 改 `_shared/update-check-header.md`（會影響**所有**技能）：改完必須跑一次 `bin/build.sh` 讓全部技能重新套用，然後把 `commands/` 與 `opencode-commands/` 底下所有受影響的變動一併 commit——不要只 commit `_shared/`，不然部署版本會跟原始碼脫節。
 
 ---
 
 ## 3. 命名規則
 
-技能的 `name` 會變成三件事：`commands-src/<name>/` 的資料夾名、`commands/<name>/` 的資料夾名，以及 symlink 進 `~/.claude/skills/<name>` 等四個路徑時的名字——**這是一個跨工具共用的扁平命名空間**，沒有子目錄隔開，所以撞名的代價比一般專案內的檔名撞名更高（AI 工具會直接看到重複或誤導的技能名稱）。
+技能的 `name` 會變成四件事：`commands-src/<name>/` 的資料夾名、`commands/<name>/` 的資料夾名、symlink 進 `~/.claude/skills/<name>` 等四個路徑時的名字，以及各工具裡的叫用字串（`/<name>`、`$<name>`）——**這是一個跨工具共用的扁平命名空間**，沒有子目錄隔開，所以撞名的代價比一般專案內的檔名撞名更高（AI 工具會直接看到重複或誤導的技能名稱）。
 
 規則：
 
@@ -98,7 +99,7 @@ git push
 
 - **改了 `commands/` 卻沒改 `commands-src/`**：下次任何人跑 `bin/build.sh` 都會把你的改動蓋掉。永遠改 `commands-src/`。
 - **改了 `commands-src/` 但忘記跑 `bin/build.sh` 就 commit**：`commands/` 會跟原始碼不同步，其他機器 `sync-skills.sh` 之後拿到的是舊的部署版本。
-- **只 commit 了其中一個資料夾**：兩個一定要一起 commit，這是這個架構「不需要在每台機器上跑 build 工具鏈」的前提（見 ARCHITECTURE.md 決策 #7）。
+- **只 commit 了其中一個資料夾**：三個一定要一起 commit，這是這個架構「不需要在每台機器上跑 build 工具鏈」的前提（見 ARCHITECTURE.md 決策 #7）。
 - **`name:` 跟資料夾名不一致**：目前無自動檢查，純靠自律；建議寫的當下就對照一次。
 - **跑 `make test` 前沒裝 `ripgrep`**：測試腳本用 `rg` 做輸出比對，`brew install ripgrep` / `apt install ripgrep` 先裝好。
 
@@ -111,4 +112,4 @@ git push
 - [ ] `description:` 講清楚做什麼 + 何時觸發
 - [ ] 跑過 `bin/build.sh`
 - [ ] 跑過 `make test`，全部 PASS
-- [ ] `commands-src/` 和對應的 `commands/` 一起 commit
+- [ ] `commands-src/`、`commands/` 和 `opencode-commands/` 一起 commit
