@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ ${1:-} == ensure ]] || { echo "Usage: x-pr ensure <base> <head> <title> <body-file>" >&2; exit 2; }
+shift
+[[ $# -eq 4 ]] || { echo "Usage: x-pr ensure <base> <head> <title> <body-file>" >&2; exit 2; }
+base=$1
+head=$2
+title=$3
+body_file=$4
+[[ -f $body_file ]] || { echo "PR body file not found: $body_file" >&2; exit 2; }
+command -v gh >/dev/null 2>&1 || { echo "GitHub CLI (gh) is required for this adapter" >&2; exit 127; }
+gh auth status >/dev/null 2>&1 || { echo "GitHub CLI is not authenticated; run: gh auth login" >&2; exit 1; }
+
+matches=$(gh pr list --state open --base "$base" --head "$head" --limit 20 \
+  --json number,url --jq '.[] | [.number, .url] | @tsv')
+count=$(printf '%s\n' "$matches" | awk 'NF { n++ } END { print n + 0 }')
+if (( count > 1 )); then
+  echo "Refusing: multiple open PRs already exist for $head -> $base" >&2
+  printf '%s\n' "$matches" >&2
+  exit 1
+fi
+
+if (( count == 1 )); then
+  number=$(printf '%s\n' "$matches" | awk 'NF {print $1; exit}')
+  url=$(printf '%s\n' "$matches" | awk 'NF {print $2; exit}')
+  gh pr edit "$number" --base "$base" --title "$title" --body-file "$body_file" >/dev/null
+  printf 'action=updated\npr_number=%s\nurl=%s\n' "$number" "$url"
+  exit 0
+fi
+
+url=$(gh pr create --base "$base" --head "$head" --title "$title" --body-file "$body_file")
+number=${url##*/}
+[[ $number =~ ^[0-9]+$ ]] || number=unknown
+printf 'action=created\npr_number=%s\nurl=%s\n' "$number" "$url"

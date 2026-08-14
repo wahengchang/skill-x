@@ -2,29 +2,70 @@
 set -euo pipefail
 
 [[ $# -eq 2 ]] || { echo "Usage: x-cycle <slug> <title>" >&2; exit 2; }
-slug=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//')
-[[ -n $slug ]] || { echo "Slug must contain letters or numbers" >&2; exit 2; }
+raw_slug=$1
+title=$2
+slug=$(printf '%s' "$raw_slug" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//')
+[[ -n $slug ]] || { echo "Slug must contain ASCII letters or numbers" >&2; exit 2; }
+(( ${#slug} <= 48 )) || { echo "Slug is too long (max 48 characters)" >&2; exit 2; }
+
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$("$script_dir/x-paths" . --repo-root)
-active="$repo_root/.dev-hub/active"
-shopt -s nullglob
-matches=("$active"/*-"$slug")
-shopt -u nullglob
-if (( ${#matches[@]} == 1 )) && [[ -d ${matches[0]} ]]; then
-  directory=${matches[0]}
-  cycle=$(basename "$directory")
-else
-  cycle="cycle-$(date -u +%Y%m%d-%H%M)-$slug"
-  directory="$active/$cycle"
-fi
-mkdir -p "$directory/artifacts/discovery" "$directory/work-items" "$directory/work-groups" "$directory/tmp"
+dev_hub="$repo_root/.dev-hub"
+active="$dev_hub/active"
+runtime="$dev_hub/runtime"
+template="$script_dir/../templates/cycle-hub.md"
+[[ -f $template ]] || { echo "Missing template: $template" >&2; exit 1; }
+mkdir -p "$active" "$runtime"
 
-if [[ ! -f $directory/hub.md ]]; then
-  temporary=$(mktemp "$directory/tmp/hub.XXXXXX")
-  trap 'rm -f "$temporary"' EXIT
-  cp "$script_dir/../templates/cycle-hub.md" "$temporary"
-  TITLE=$2 CYCLE=$cycle NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
-    perl -0pi -e 's/<title>/$ENV{TITLE}/g; s/cycle-YYYYMMDD-HHmm-<slug>/$ENV{CYCLE}/g; s/<ISO-8601>/$ENV{NOW}/g' "$temporary"
-  mv "$temporary" "$directory/hub.md"
+# Serialize same-scope creation so concurrent reruns cannot create duplicate Cycles.
+lock="$runtime/x-cycle-$slug.lock"
+acquired=false
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if mkdir "$lock" 2>/dev/null; then
+    acquired=true
+    break
+  fi
+  sleep 0.05
+done
+$acquired || { echo "Could not acquire Cycle lock for: $slug" >&2; exit 1; }
+trap 'rm -rf "$lock" "${rendered:-}"' EXIT
+
+shopt -s nullglob
+matches=("$active"/cycle-*-$slug)
+shopt -u nullglob
+if (( ${#matches[@]} > 1 )); then
+  printf 'Ambiguous Cycle slug %s; matches:\n' "$slug" >&2
+  printf '  %s\n' "${matches[@]}" >&2
+  exit 1
 fi
+if (( ${#matches[@]} == 1 )) && [[ -d ${matches[0]} ]]; then
+  printf '%s\n' "${matches[0]}"
+  exit 0
+fi
+
+cycle="cycle-$(date -u +%Y%m%d-%H%M%S)-$slug"
+directory="$active/$cycle"
+rendered=$(mktemp "$runtime/x-cycle-render.XXXXXX")
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+TITLE=$title CYCLE=$cycle NOW=$now awk '
+function replace_all(s, needle, repl, pos) {
+  while ((pos = index(s, needle)) > 0) {
+    s = substr(s, 1, pos - 1) repl substr(s, pos + length(needle))
+  }
+  return s
+}
+{
+  line = replace_all($0, "<title>", ENVIRON["TITLE"])
+  line = replace_all(line, "cycle-YYYYMMDD-HHmm-<slug>", ENVIRON["CYCLE"])
+  line = replace_all(line, "<ISO-8601>", ENVIRON["NOW"])
+  print line
+}
+' "$template" > "$rendered"
+
+# mkdir is the final collision-safe claim. No partial Cycle exists before render succeeds.
+mkdir "$directory"
+mkdir -p "$directory/artifacts/discovery" "$directory/artifacts/reviews" "$directory/artifacts/debug" \
+  "$directory/work-items" "$directory/work-groups" "$directory/tmp"
+mv "$rendered" "$directory/hub.md"
+rendered=
 printf '%s\n' "$directory"

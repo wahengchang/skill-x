@@ -12,7 +12,7 @@
 
 ## Why This Blocks a Decision
 
-## Current Hypothesis
+## Existing Evidence / Current Hypothesis
 
 ## Scope / Timebox
 
@@ -39,4 +39,8 @@
 ## Handover
 
 - Current state: ready-for-spike-execution
+- Completed: question, method, evidence target, decision rule
+- Blockers: none
+- Owner decision: none
 - Next: execute SP-XXX
+- Target: SP-XXX / WG-XXX

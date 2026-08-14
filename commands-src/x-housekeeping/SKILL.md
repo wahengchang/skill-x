@@ -13,35 +13,37 @@ description: 安全清除完成 worktree、merged local branch、runtime/tmp，�
 
 ## Inputs
 
-通用輸入：使用者 Prompt / 明確目標、專案背景、repo 文件、程式碼與 Git 狀態；另加 Git worktree/branch/PR state 與 Cycle/WG files。可支援 `--dry-run`；預設僅清理已證明安全的項目。
+通用輸入：使用者 Prompt / 明確目標、專案背景、repo 文件、程式碼與 Git 狀態；另加 Git worktree/branch/PR state 與 Cycle/WG files。預設只清理已證明安全的項目。
 
 ## Outputs
 
-- 刪除完成 worktree、merged local branch、safe runtime/tmp
+- 刪除完成 worktree、merged/integrated local branch、safe runtime/tmp
 - `git worktree prune`（需要時）
 - `.dev-hub/logs/cycle-*.md`
 - Cycle closure / housekeeping commit
 
 ## Safety gates
 
-不得刪除 dirty worktree、未 push 或未整合的 commit、active/unmerged branch、狀態不確定的 work item/WG，或 remote branch（除非使用者明確要求）。
+不得刪除 dirty worktree、未 push/未到達 remote integration target 的 commit、active/unmerged branch、狀態不確定的 work item/WG，或 remote branch（除非使用者明確要求）。
 
 ## Required workflow
 
-1. 掃描 `.dev-hub/active`、`worktrees`、`runtime` 與 `git worktree list`。
+1. 先 fetch/prune relevant remote，掃 `.dev-hub/active`、`worktrees`、`runtime` 與 `git worktree list`。
 2. 對每項分類：safe-remove / active / orphan-needs-proof / blocked。
-3. safe worktree 使用 `git worktree remove`；之後需要才 `git worktree prune`。
-4. 只刪已 merged/integrated 的 local branch。
-5. Cycle closure gate：全部 work items 為 `done/cancelled/deferred`，且無 active/unmerged WG。
-6. 產生短 Cycle log，刪除 active Cycle directory，commit 新 log。
+3. `scripts/x-clean` 必須同時證明 candidate 已整合到 local target **且**已到達該 target 的 remote/upstream；只 locally merged 不算 safe。
+4. safe worktree 使用 `git worktree remove`；之後需要才 `git worktree prune`。
+5. 只刪已 remote-proven integrated 的 local branch；remote branch 預設永不刪除。
+6. 清除已完成 standalone runtime / Cycle tmp；不碰 active evidence。
+7. Cycle closure gate：全部 work items 為 `done/cancelled/deferred`，且無 active/unmerged WG。
+8. 產生短 Cycle log，刪 active Cycle directory，commit 新 log。
 
-## Handover
+## Handover / continue
 
-輸出已清理、保留、blocked 清單。若尚有 unmerged PR，推薦下一步是等待/完成該 PR，而不是強制清理。
+每次完成都輸出 `Current state / Completed / Blockers / Owner decision / Next / Target`。收到 `continue` 時依序使用：明確 target → 上次 `Handover.Next` → WG stage → 唯一 active WG → Cycle 中最高優先且 ready 的 WG；仍有多個合理目標才詢問一次。
+
+若尚有 unmerged/unpushed work，`Next` 必須是完成/等待該 PR，不得強制清理。
 
 ## Bundled assets
 
-- `templates/cycle-log.md`：Cycle closure 的短永久紀錄模板。
-- `scripts/x-clean`：必須明確傳入 `<worktree> <branch> <integration-target>`；candidate 可只在自己的 clean linked worktree 中 checkout，且為 target 的 strict ancestor 時才回報 `safe-remove` 或執行移除。
-
-Standalone runtime 只能清除 project-local `.dev-hub/runtime/` 的已完成資料。Cycle closure 前必須確認所有 work items 為 `done/cancelled/deferred` 且沒有 active/unmerged WG；remote branch 預設永不刪除。
+- `templates/cycle-log.md`：Cycle closure 的短永久紀錄。
+- `scripts/x-clean`：安全判斷與移除 linked worktree/local branch；remote reachability 是 hard gate。

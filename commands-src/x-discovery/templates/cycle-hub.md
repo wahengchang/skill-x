@@ -30,7 +30,6 @@
 
 | Candidate | Work | Type hint | Why | Area | Risk | Priority | Status | Formal item | Owner | WG |
 |---|---|---|---|---|---|---|---|---|---|---|
-| WK-001 |  | issue/spike |  |  |  |  | ready-for-planning | — | — | — |
 
 ## Owner Decisions
 

@@ -3,6 +3,7 @@
 - Status: ready
 - Owner: <owner>
 - Work items: `IS-XXX`, `SP-XXX`
+- Base: <base branch>
 - Branch: `x/<cycle>-wg-xxx-<slug>`
 - Worktree: `.dev-hub/worktrees/<...>/`
 - Implementation Agent: <agent-id>
@@ -28,6 +29,8 @@
 ## Handover
 
 - Current state: ready-for-implementation
+- Completed: WG assignment, branch and worktree prepared
 - Blockers: none
+- Owner decision: none
 - Next: implement <work item>
 - Target: WG-XXX

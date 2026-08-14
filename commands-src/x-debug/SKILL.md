@@ -12,7 +12,7 @@ description: 以 evidence 驗證 root cause 後修復、補 regression test 並�
 ## When to use
 
 - 已有錯誤、失敗測試、production symptom、review finding，但原因不清楚。
-- 不用於一般 feature planning 或「順便重構」。
+- 不用於一般 feature planning 或順便重構。
 
 ## Inputs
 
@@ -26,20 +26,23 @@ description: 以 evidence 驗證 root cause 後修復、補 regression test 並�
 
 ## Required workflow
 
-1. 收集 symptom、reproduction、recent changes 與相關 code path。
+1. 收集 symptom、reproduction、recent changes；沿 data/code path 往回追，不先猜修法。
 2. 提出具體且可測試的 root-cause hypothesis。
-3. 用 log/assertion/minimal experiment 驗證；錯誤則回到 evidence gathering，不猜。
-4. 三個 hypothesis 失敗後停止並升級。
-5. 確認 root cause 後做最小修正，限制 blast radius。
-6. 新增 regression test：無 fix 時失敗、有 fix 時通過。
-7. 重現原問題、跑相關與必要 full tests，產生 debug report。
+3. 用 log/assertion/minimal experiment 驗證；錯誤則回到 evidence gathering。
+4. 三個 hypothesis 失敗後停止並升級，不用第四個猜測硬修。
+5. 確認 root cause 後做最小修正，限制 blast radius；不要順手重構無關區域。
+6. 新增 regression test：證明無 fix 時失敗、有 fix 時通過。
+7. 重現原問題、跑相關與必要 full tests；不能只說「should fix」。
+8. 產生 debug report；若無法完全驗證，標記 `DONE_WITH_CONCERNS`，不能假裝 DONE。
 
-## Handover
+## Handover / continue
 
-WG context 下，任何 fix 都使舊 review stale；下一步固定是 `x-review`，不是直接 `x-ship`。
+每次完成都輸出 `Current state / Completed / Blockers / Owner decision / Next / Target`。收到 `continue` 時依序使用：明確 target → 上次 `Handover.Next` → WG stage → 唯一 active WG → Cycle 中最高優先且 ready 的 WG；仍有多個合理目標才詢問一次。
+
+WG context 下任何 fix 都使舊 review stale；下一步固定是 `x-review`，不是直接 `x-ship`。
 
 ## Bundled assets
 
 - `templates/debug-report.md`：記錄 symptom、hypothesis、evidence、confirmed root cause、fix、regression 與 handover。
 
-Standalone mode 沒有 Cycle 時，將 evidence 寫在 project-local `.dev-hub/runtime/x-debug-*/` 或使用者指定路徑；有 Cycle/WG 時寫入 `artifacts/debug/DBG-XXX.md` 並更新 work item、WG 與 `hub.md`。不得以 symptom-only patch 取代已驗證的 root-cause fix。
+Standalone mode 沒有 Cycle 時，evidence 寫在 main repo `.dev-hub/runtime/x-debug-*/` 或使用者指定路徑。

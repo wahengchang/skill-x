@@ -17,6 +17,9 @@
 
 ## Regression Test
 
+- Fails without fix:
+- Passes with fix:
+
 ## Verification
 
 ## Remaining Concerns
@@ -24,4 +27,8 @@
 ## Handover
 
 - Current state: fix-complete-review-stale
+- Completed: root-cause fix, regression proof, verification
+- Blockers: none
+- Owner decision: none
 - Next: x-review
+- Target: <WG / branch / changed fingerprint>

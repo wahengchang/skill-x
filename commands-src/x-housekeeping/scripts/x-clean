@@ -16,28 +16,66 @@ worktree_root=$(git -C "$worktree" rev-parse --show-toplevel)
 common_dir=$(git -C "$worktree" rev-parse --path-format=absolute --git-common-dir)
 repo=$(cd "$(dirname "$common_dir")" && pwd -P)
 [[ $worktree_root != "$repo" ]] || { echo "Refusing: main checkout is not a cleanup candidate" >&2; exit 1; }
-git -C "$repo" rev-parse --verify "refs/heads/$branch" >/dev/null || { echo "Refusing: local branch does not exist" >&2; exit 1; }
+branch_ref="refs/heads/$branch"
+git -C "$repo" rev-parse --verify "$branch_ref" >/dev/null || { echo "Refusing: local branch does not exist" >&2; exit 1; }
 target_commit=$(git -C "$repo" rev-parse --verify "$target^{commit}") || { echo "Refusing: integration target does not exist" >&2; exit 1; }
-branch_commit=$(git -C "$repo" rev-parse "refs/heads/$branch")
+branch_commit=$(git -C "$repo" rev-parse "$branch_ref")
 [[ -z $(git -C "$worktree" status --porcelain) ]] || { echo "Refusing: worktree is dirty" >&2; exit 1; }
 [[ $(git -C "$worktree" branch --show-current) == "$branch" ]] || { echo "Refusing: worktree does not check out candidate branch" >&2; exit 1; }
 
-while IFS= read -r active_worktree; do
-  [[ $active_worktree == "$worktree_root" || $(git -C "$active_worktree" branch --show-current) != "$branch" ]] || {
-    echo "Refusing: branch is active in a worktree" >&2
-    exit 1
-  }
-done < <(git -C "$repo" worktree list --porcelain | awk '/^worktree / {print substr($0, 10)}')
+current=
+while IFS= read -r line; do
+  case $line in
+    worktree\ *) current=${line#worktree } ;;
+    "branch $branch_ref")
+      [[ $current == "$worktree_root" ]] || { echo "Refusing: branch is active in another worktree: $current" >&2; exit 1; }
+      ;;
+  esac
+done < <(git -C "$repo" worktree list --porcelain)
 
 [[ $branch_commit != "$target_commit" ]] || { echo "Refusing: branch is the integration target" >&2; exit 1; }
 git -C "$repo" merge-base --is-ancestor "$branch_commit" "$target_commit" || {
-  echo "Refusing: branch is not strictly integrated into target" >&2
+  echo "Refusing: branch is not integrated into local target" >&2
   exit 1
 }
 
+symbolic=$(git -C "$repo" rev-parse --symbolic-full-name "$target" 2>/dev/null || true)
+remote_target=
+remote_blocker=
+case $symbolic in
+  refs/remotes/*) remote_target=${symbolic#refs/remotes/} ;;
+  refs/heads/*)
+    upstream=$(git -C "$repo" for-each-ref --format='%(upstream:short)' "$symbolic" | head -1)
+    if [[ -n $upstream ]]; then
+      remote_target=$upstream
+    else
+      remote_blocker="local target has no upstream"
+    fi
+    ;;
+  *) remote_blocker="integration target is not a local branch with upstream or a remote-tracking branch" ;;
+esac
+if [[ -z $remote_blocker ]]; then
+  if ! remote_commit=$(git -C "$repo" rev-parse --verify "$remote_target^{commit}" 2>/dev/null); then
+    remote_blocker="remote integration target is unavailable: $remote_target"
+  elif ! git -C "$repo" merge-base --is-ancestor "$branch_commit" "$remote_commit"; then
+    remote_blocker="branch is integrated only locally; not reachable from $remote_target"
+  fi
+fi
+if [[ -n $remote_blocker ]]; then
+  if $remove; then
+    echo "Refusing: $remote_blocker" >&2
+    exit 1
+  fi
+  printf 'action=blocked-remote-unverified\nbranch=%s\nworktree=%s\nlocal_target=%s\nremote_target=%s\nreason=%s\n' \
+    "$branch" "$worktree_root" "$target" "${remote_target:-none}" "$remote_blocker"
+  exit 0
+fi
+
 if $remove; then
   git -C "$repo" worktree remove "$worktree"
-  git -C "$repo" branch -d "$branch"
+  # Delete only the exact ref we proved safe. Ref movement between check/delete aborts deletion.
+  git -C "$repo" update-ref -d "$branch_ref" "$branch_commit"
   git -C "$repo" worktree prune
 fi
-printf 'safe-remove %s %s into %s\n' "$worktree" "$branch" "$target"
+printf 'action=%s\nbranch=%s\nworktree=%s\nlocal_target=%s\nremote_target=%s\n' \
+  "$([[ $remove == true ]] && echo removed || echo safe-remove)" "$branch" "$worktree_root" "$target" "$remote_target"

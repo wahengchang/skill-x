@@ -7,40 +7,49 @@ description: 把工作表中的每項工作定義完整，建立 Issue/Spike/WG 
 
 ## When to use
 
-- `x-discovery` 已建立 `hub.md`，需要把工作逐項準備到可以直接開工。
+- `x-discovery` 已建立 `hub.md`，需要把一項、選定多項或全部工作準備到可直接開工。
 - 單一複雜需求需要完整工程規劃，即使沒有 Dev Hub 也可使用。
 
 本 Skill 不實作產品程式碼，也不做最終 code review。
 
 ## Inputs
 
-通用輸入：專案背景、repo 文件、程式碼、Prompt。Cycle mode 額外讀 `hub.md` 與指定 `WK-XXX`；Standalone mode 直接以使用者需求作為單一工作。
+通用輸入：使用者 Prompt / 明確目標、專案背景、repo 文件、程式碼與 Git 狀態。Cycle mode 額外讀 `hub.md` 與指定 `WK-XXX`；Standalone mode 直接以使用者需求作為單一工作。
 
 ## Outputs
 
 - `work-items/IS-XXX-<slug>.md` 或 `SP-XXX-<slug>.md`
 - `work-groups/WG-XXX-<slug>.md`
 - 更新 `hub.md` 的 formal item、Owner、WG、status
-- `1 WG = 1 branch = 1 worktree = 1 PR` 的執行環境
+- `1 WG = 1 branch = 1 worktree = 1 PR` 的可執行環境
 
 ## Required workflow
 
-1. 選定一項、指定多項，或全部 `ready-for-planning` rows。
-2. 深入讀 repo，確認現況、既有 pattern、interfaces、schema 與相關 tests。
-3. 分類為 `IS-XXX`（可直接實作）或 `SP-XXX`（需實驗才能決策）。
-4. 定義 problem、scope、architecture/data flow、dependencies、failure modes、implementation order、tests、acceptance 與 DoR。
-5. Assign Owner 時建立或分配 WG；一個 item 同時只屬於一個 WG。
-6. 建立 branch/worktree，更新 status 為 `ready`，確認未參與規劃的 implementer 可直接開始；重跑時重用既有 WG branch/worktree，絕不建立重複項目。
+1. **選定工作**：一項、指定多項，或全部 `ready-for-planning` rows；先查既有 formal item/WG，重跑不得 duplicate。
+2. **Repo-first evidence**：深入讀現況、既有 patterns、interfaces、schema、相關 tests 與 history。不要把可查問題丟給 Owner。
+3. **Scope challenge**：逐項確認現有 code 是否已部分解題、最小完整 change 是什麼、是否有 built-in/current pattern 可避免自製平行系統；把不阻塞核心目標的內容明確列為 out-of-scope。
+4. **分類 Work Type**：`IS-XXX` = 已能定義實作與 acceptance；`SP-XXX` = 必須先靠 experiment/prototype/research 才能決策。
+5. **完成工程定義**：problem/goal、scope in/out、architecture/boundaries/data flow、state transitions、interfaces/dependencies、migration/config、failure modes/edge cases/security/data risks、implementation order、tests、acceptance、DoR。複雜 flow 必須用 ASCII diagram。
+6. **Spike 規則**：一個 SP 只回答一個核心問題；寫清方法、evidence、decision rule 與唯一可執行結論，不丟選項清單給執行者。
+7. **Test design**：列 happy/negative/edge/regression 路徑；需要時畫 test/data-flow 圖，確保未參與規劃的 implementer 能直接執行。
+8. **Assign Owner / WG**：使用現有 Agent/team roster，不捏造真人；一 item 同時只屬於一個 WG。重大且接近的 trade-off 要先給具體推薦與理由，再問 Owner。
+9. **準備執行**：以 `scripts/x-worktree ensure` 建立或重用 WG branch/worktree；寫回 WG 與 `hub.md`，status 才能變成 `ready`。
 
-## Handover
+## Owner questions
 
-- `IS-XXX` → `implement IS-XXX` 或 `continue`。
-- `SP-XXX` → `execute SP-XXX` 或 `continue`；完成後回填 evidence/結論。
+只在產品方向、scope、priority、user-visible behavior、重大不可逆 trade-off 無法由 evidence 解決時詢問。普通技術選擇先給 opinionated recommendation。
+
+## Handover / continue
+
+每次完成都輸出 `Current state / Completed / Blockers / Owner decision / Next / Target`。收到 `continue` 時依序使用：明確 target → 上次 `Handover.Next` → WG stage → 唯一 active WG → Cycle 中最高優先且 ready 的 WG；仍有多個合理目標才詢問一次。
+
+`IS-XXX` → `implement IS-XXX`；`SP-XXX` → `execute SP-XXX`，完成後回填 evidence/結論。
 
 ## Bundled assets
 
-- `templates/issue.md`：IS 的 scope、architecture/data flow、risk、tests、acceptance 與 DoR 模板。
-- `templates/spike.md`：單一核心問題、evidence 與 decision rule 的 SP 模板。
-- `templates/work-group.md`：`1 WG = 1 branch = 1 worktree = 1 PR` 的執行邊界模板。
+- `templates/issue.md`：可由陌生 implementer 直接執行的 IS 工程規格。
+- `templates/spike.md`：單一 decisive question 的 SP 模板。
+- `templates/work-group.md`：WG 執行與交付邊界。
+- `scripts/x-worktree`：idempotent 建立/重用 `1 WG = 1 branch = 1 worktree`。
 
-建立檔案前先讀取並保留未知 Markdown 區段；更新必須 atomic。只有產品方向、scope、priority 或 user-visible behavior 才詢問 Owner，技術選擇先提出有證據的推薦方案。
+更新 Markdown 前先讀取並保留未知區段；寫入採 atomic replacement。所有 `.dev-hub` 路徑必須解析到 main repository root。

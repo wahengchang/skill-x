@@ -8,6 +8,10 @@
 
 ## Problem / Goal
 
+## Evidence / Existing Patterns
+
+- <repo evidence and code paths already inspected>
+
 ## Scope
 
 ### In
@@ -16,15 +20,17 @@
 
 ## Current → Desired Behavior
 
-## Architecture / Data Flow
+## Architecture / Boundaries / Data Flow
 
 ```text
 <ASCII diagram>
 ```
 
+## State Transitions / Data / Migration / Config
+
 ## Interfaces / Dependencies
 
-## Failure Modes / Edge Cases / Risks
+## Failure Modes / Edge Cases / Security / Data Risks
 
 ## Implementation Order
 
@@ -32,14 +38,22 @@
 
 ## Tests
 
+| Path | Setup / Input | Expected Result |
+|---|---|---|
+| Happy | | |
+| Negative | | |
+| Edge | | |
+| Regression | | |
+
 ## Acceptance Criteria
 
 - [ ]
 
 ## Definition of Ready
 
+- [ ] Existing implementation/patterns inspected
 - [ ] Scope and behavior clear
-- [ ] Dependencies identified
+- [ ] Dependencies and interfaces identified
 - [ ] Risks and failure paths addressed
 - [ ] Tests and acceptance defined
 - [ ] Owner/WG/branch/worktree prepared
@@ -47,4 +61,8 @@
 ## Handover
 
 - Current state: ready-for-implementation
+- Completed: engineering plan and executable acceptance
+- Blockers: none
+- Owner decision: none
 - Next: implement IS-XXX
+- Target: IS-XXX / WG-XXX

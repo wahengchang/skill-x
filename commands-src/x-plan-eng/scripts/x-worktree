@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ ${1:-} == ensure ]] || { echo "Usage: x-worktree ensure <cycle> <WG-NNN> <slug> [base]" >&2; exit 2; }
+shift
+[[ $# -ge 3 && $# -le 4 ]] || { echo "Usage: x-worktree ensure <cycle> <WG-NNN> <slug> [base]" >&2; exit 2; }
+cycle=$1
+wg=$2
+slug=$3
+base=${4:-HEAD}
+[[ $cycle =~ ^cycle-[0-9]{8}-[0-9]{4,6}-[a-z0-9]+(-[a-z0-9]+)*$ ]] || { echo "Invalid Cycle: $cycle" >&2; exit 2; }
+[[ $wg =~ ^WG-[0-9]{3}$ ]] || { echo "Invalid WG: $wg" >&2; exit 2; }
+[[ $slug =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { echo "Invalid slug: $slug" >&2; exit 2; }
+(( ${#slug} <= 48 )) || { echo "Slug is too long (max 48 characters)" >&2; exit 2; }
+
+# x-worktree is bundled under x-plan-eng; resolve main repo directly so the helper is standalone.
+common_dir=$(git rev-parse --path-format=absolute --git-common-dir)
+repo_root=$(cd "$(dirname "$common_dir")" && pwd -P)
+dev_hub="$repo_root/.dev-hub"
+mkdir -p "$dev_hub/worktrees" "$dev_hub/runtime"
+
+short_cycle=${cycle#cycle-}
+wg_lower=$(printf '%s' "$wg" | tr '[:upper:]' '[:lower:]')
+branch="x/$short_cycle-$wg_lower-$slug"
+expected="$dev_hub/worktrees/$short_cycle-$wg_lower-$slug"
+branch_ref="refs/heads/$branch"
+base_commit=$(git -C "$repo_root" rev-parse --verify "$base^{commit}") || { echo "Invalid base: $base" >&2; exit 1; }
+
+existing_worktree=
+current=
+while IFS= read -r line; do
+  case $line in
+    worktree\ *) current=${line#worktree } ;;
+    "branch $branch_ref") existing_worktree=$current ;;
+  esac
+done < <(git -C "$repo_root" worktree list --porcelain)
+
+if [[ -n $existing_worktree ]]; then
+  printf 'action=reused\nbranch=%s\nworktree=%s\n' "$branch" "$existing_worktree"
+  exit 0
+fi
+
+if [[ -e $expected ]]; then
+  echo "Refusing: expected worktree path exists but is not registered: $expected" >&2
+  exit 1
+fi
+
+if git -C "$repo_root" show-ref --verify --quiet "$branch_ref"; then
+  git -C "$repo_root" worktree add -q "$expected" "$branch"
+else
+  git -C "$repo_root" worktree add -q -b "$branch" "$expected" "$base_commit"
+fi
+printf 'action=created\nbranch=%s\nworktree=%s\n' "$branch" "$expected"
