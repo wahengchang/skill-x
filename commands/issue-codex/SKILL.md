@@ -48,11 +48,11 @@ Resolve the exact GitHub repository, engineering objective, relevant context, co
 
 When GitHub issue search is supported by the available tooling, search open issues in the target repository for the objective. Reuse an issue only when it represents substantially the same engineering outcome; similar components or keywords alone are insufficient. Before creating or dispatching, inspect the candidate issue and its comments for evidence of an active or completed Codex delegation for this request. If an equivalent issue is already being handled, reuse it and do not dispatch again.
 
-If the available tooling cannot search issues or comments, do not claim that a duplicate check was performed. Continue only when doing so does not risk a known duplicate, and disclose the tooling limitation in the receipt.
+Issue and comment search/read-back are prerequisites for exact-once dispatch. If the available tooling cannot search open issues and inspect their comments, stop before creating or dispatching anything. State that duplicate safety could not be established and ask the user to provide tooling that can perform those checks. Never weaken the duplicate check merely to complete the handoff.
 
 ## 2. Materialize
 
-Draft a concise, action-oriented issue title and an executable issue body. Use the following sections when applicable; omit an empty section rather than inventing content.
+Draft a concise, action-oriented issue title and an executable issue body. Include all six headings below in this order. Keep a heading concise when little detail is available, but do not omit it or invent content; use an explicit statement such as `No additional constraints identified` when the repository and request establish that there is nothing further to add.
 
 ### Goal
 
@@ -64,7 +64,7 @@ Describe the current behavior, problem, motivation, and established repository c
 
 ### Scope
 
-Use **In scope** and **Out of scope** when boundaries matter.
+State what is in scope. Also state what is out of scope when the request or repository context establishes a meaningful boundary; otherwise say that no additional out-of-scope work was identified.
 
 ### Requirements
 
@@ -125,7 +125,7 @@ Before finishing:
 In the final result, summarize the implementation, verification performed, and any remaining risks or blockers.
 ```
 
-If comment creation fails, keep the issue and classify the dispatch as `not-submitted`. Do not compensate with a second issue or another kind of mention.
+If comment creation fails, keep the issue and classify the dispatch as `not-submitted`. Do not compensate with a second issue, another kind of mention, or a retry. A later invocation must inspect the issue and comments afresh before deciding whether a new dispatch attempt is safe.
 
 ## 5. Confirm
 
