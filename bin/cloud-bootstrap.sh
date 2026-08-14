@@ -34,9 +34,19 @@ if [[ "$opencode_version" == v1 && -d "$command_source" ]]; then
       echo "WARNING: skipping existing non-managed command: $dest" >&2
       continue
     fi
+    # A previous interactive install may have left a managed symlink here.
+    # cp follows destination symlinks, so unlink it before installing a pinned
+    # copy or we could overwrite the source checkout.
+    [[ -L "$dest" ]] && rm -- "$dest"
     cp -a "$command_file" "$dest"
   done < <(find "$command_source" -mindepth 1 -maxdepth 1 -type f -name '*.md' -print0 | sort -z)
   echo "Installed pinned OpenCode v1 command shims."
 elif [[ "$opencode_version" == v2 ]]; then
+  commands_target="$HOME/.config/opencode/commands"
+  if [[ -d "$commands_target" ]]; then
+    while IFS= read -r -d '' dest; do
+      [[ -f "$dest" ]] && grep -q "$MANAGED_MARKER" "$dest" 2>/dev/null && rm -- "$dest"
+    done < <(find "$commands_target" -mindepth 1 -maxdepth 1 \( -type f -o -type l \) -name '*.md' -print0)
+  fi
   echo "OpenCode v2 detected; relying on its native skill slash commands."
 fi

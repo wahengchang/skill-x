@@ -389,6 +389,46 @@ test_cloud_bootstrap_installs_command_shims() {
   [[ -f "$home_v2/.config/opencode/skills/example-skill/SKILL.md" ]]
 }
 
+test_lifecycle_selected_install_status_and_uninstall() {
+  local project="$TEST_ROOT/lifecycle"
+  local home="$TEST_ROOT/lifecycle-home"
+  copy_project "$project"
+  git -C "$project" init -q
+  git -C "$project" config user.email test@example.invalid
+  git -C "$project" config user.name 'Test Runner'
+  git -C "$project" add . && git -C "$project" commit -qm initial
+
+  HOME="$home" SKILL_X_OPENCODE_VERSION=v2 "$project/bin/skill-x" install --agents codex >/dev/null
+  [[ -L "$home/.agents/skills/example-skill" ]]
+  [[ ! -e "$home/.claude" && ! -e "$home/.config/opencode" ]]
+  local manifest json
+  manifest=$(find "$home/.local/state/skill-x" -name install.json)
+  [[ -f "$manifest" ]]
+  json=$(HOME="$home" "$project/bin/skill-x" status --json)
+  python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["schema_version"] == 1 and d["selected_agents"] == ["codex"]' "$json"
+
+  mkdir -p "$home/.agents/skills/user-skill"; echo keep > "$home/.agents/skills/user-skill/file"
+  HOME="$home" "$project/bin/skill-x" uninstall >/dev/null
+  [[ ! -e "$home/.agents/skills/example-skill" ]]
+  [[ -f "$home/.agents/skills/user-skill/file" && -d "$project" ]]
+}
+
+test_cloud_transitions_do_not_follow_links_or_leave_v1_copies() {
+  local project="$TEST_ROOT/cloud-transition-source" remote="$TEST_ROOT/cloud-transition.git"
+  local home="$TEST_ROOT/cloud-transition-home" commands
+  make_git_fixture "$project" "$remote"; commands="$home/.config/opencode/commands"
+  local ref; ref=$(git -C "$project" rev-parse HEAD)
+  mkdir -p "$commands"
+  ln -s "$project/opencode-commands/funny-text-rewriter.md" "$commands/funny-text-rewriter.md"
+  local before; before=$(git -C "$project" hash-object opencode-commands/funny-text-rewriter.md)
+  HOME="$home" SKILL_X_OPENCODE_VERSION=v1 "$project/bin/cloud-bootstrap.sh" "file://$remote" "$ref" >/dev/null
+  [[ -f "$commands/funny-text-rewriter.md" && ! -L "$commands/funny-text-rewriter.md" ]]
+  [[ $(git -C "$project" hash-object opencode-commands/funny-text-rewriter.md) == "$before" ]]
+  echo user > "$commands/user.md"
+  HOME="$home" SKILL_X_OPENCODE_VERSION=v2 "$project/bin/cloud-bootstrap.sh" "file://$remote" "$ref" >/dev/null
+  [[ ! -e "$commands/funny-text-rewriter.md" && -f "$commands/user.md" ]]
+}
+
 run_test 'build injects once and copies support files' test_build_injects_header_and_support_files
 run_test 'invalid build preserves previous deployment' test_build_rejects_invalid_frontmatter_without_destroying_output
 run_test 'build accepts crlf frontmatter' test_build_accepts_crlf_frontmatter
@@ -404,6 +444,8 @@ run_test 'update check fails open without a remote' test_update_check_fails_open
 run_test 'apply update fast-forwards and resynchronizes' test_apply_update_fast_forwards_and_resyncs
 run_test 'cloud bootstrap installs copies from a pinned ref' test_cloud_bootstrap_copies_pinned_content
 run_test 'cloud bootstrap installs pinned command shims' test_cloud_bootstrap_installs_command_shims
+run_test 'lifecycle honors selection, reports JSON, and safely uninstalls' test_lifecycle_selected_install_status_and_uninstall
+run_test 'cloud transitions unlink managed shims safely' test_cloud_transitions_do_not_follow_links_or_leave_v1_copies
 
 printf '\nRESULT: %d passed, %d failed\n' "$passed" "$failed"
 (( failed == 0 ))

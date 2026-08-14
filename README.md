@@ -1,24 +1,60 @@
-# skill-x-starter
+# skill-x
 
 把同一組個人 `SKILL.md` 技能部署到 Claude Code、Codex CLI 與 OpenCode。內容以 private Git repository 為唯一來源；個人電腦使用 symlink 與可選更新，容器 image 則安裝固定版本的副本。
 
-## 安裝
+## 五分鐘快速開始
 
 ```bash
-git clone <private-repo-url> ~/.skill-x-starter
-cd ~/.skill-x-starter
-./install.sh
+git clone https://github.com/wahengchang/skill-x.git ~/.skill-x
+cd ~/.skill-x
+./bin/skill-x install --agents claude,codex,opencode
+./bin/skill-x status
 ```
 
-安裝程式會建立部署版本並同步到：
+`init` 是 `install` 的同義詞；重複執行是安全的。省略 `--agents` 會選擇全部
+三個工具，也可以只指定已安裝的工具（例如 `--agents codex,opencode`）。未選的
+工具目錄不會被建立。安裝程式會偵測各 CLI 版本、建置、同步、執行狀態記錄，
+並印出下一步及叫用語法。若你使用 private fork，將 clone URL 換成 fork URL；
+其餘操作相同。
+
+選取對應工具後，安裝程式會同步到：
 
 - `~/.claude/skills/`
-- `~/.codex/skills/`
-- `~/.agents/skills/`（Codex 防禦性相容路徑）
+- `~/.agents/skills/`（Codex 的主要使用者路徑）
 - `~/.config/opencode/skills/`
 - `~/.config/opencode/commands/`（僅 OpenCode v1，見下節）
 
-以 `bin/doctor.sh` 檢視同步狀態。Windows 若未開啟 symlink 權限，目前不支援自動退回複製模式。
+`~/.codex/skills/` 是舊版相容路徑，生命週期 CLI 不會預設寫入；需要支援舊環境
+時仍可使用底層 `bin/sync-skills.sh`。Windows 若未開啟 symlink 權限，目前不支援
+自動退回複製模式。
+
+## 日常生命週期
+
+```bash
+bin/skill-x status             # fetch upstream 並顯示 current/behind/ahead/diverged/dirty
+bin/skill-x status --json      # 穩定、可供程式讀取的 JSON
+bin/skill-x update --check     # 只檢查
+bin/skill-x update             # 預覽變更技能，不修改 checkout
+bin/skill-x update --yes       # 明確同意後才 fast-forward、重建、同步、診斷
+bin/skill-x sync               # 修復遺失連結；checkout 搬家後也用此命令
+bin/skill-x doctor --strict    # managed path 異常時回傳非零
+bin/skill-x uninstall          # 僅移除 manifest 記錄的項目，保留 checkout
+bin/skill-x uninstall --remove-checkout # checkout 乾淨時一併移除
+```
+
+安裝狀態位於 `~/.local/state/skill-x/<install-id>/install.json`。manifest 記錄 checkout、
+commit、agent 版本、OpenCode 模式與每個 managed path；因此 uninstall 不會依名稱猜測，
+也不會刪除碰巧同名的使用者檔案。`--remove-checkout` 遇到 dirty checkout 會拒絕。
+更新前一定 fetch tracked upstream；dirty 或 diverged checkout 不會自動更新，請先 commit、
+stash，或依需要 rebase/reset 後重試。
+
+### 排解問題
+
+- **collision / foreign**：同名一般檔案或目錄屬於使用者，安裝器會保留；請自行改名後 `sync`。
+- **missing / stale link**：執行 `sync`。checkout 已移動時，從新位置執行它以更新 manifest。
+- **unknown OpenCode version**：設定 `SKILL_X_OPENCODE_VERSION=v1` 或 `v2` 後重跑 `sync`。
+- **dirty update**：commit 或 stash 本機修改後再更新。
+- **diverged update**：先手動 rebase/reset 到 tracked upstream；CLI 不會自行丟棄 commit。
 
 ## 各工具的明確叫用方式
 
@@ -27,7 +63,7 @@ cd ~/.skill-x-starter
 | 工具 | 叫用方式 | 來源 |
 | --- | --- | --- |
 | Claude Code | `/<skill>` | `~/.claude/skills/<skill>/SKILL.md` 自動成為 slash command，不需額外檔案 |
-| Codex | `$<skill>`，或用 `/skills` 選單 | `~/.codex/skills/<skill>/SKILL.md`；已棄用的 custom prompts（`/prompts:<name>`）預設不安裝 |
+| Codex | `$<skill>`，或用 `/skills` 選單 | `~/.agents/skills/<skill>/SKILL.md`；已棄用的 custom prompts（`/prompts:<name>`）預設不安裝 |
 | OpenCode v1 | `/<skill>` | 由 `bin/build.sh` 產生、再 symlink 到 `~/.config/opencode/commands/<skill>.md` 的 command shim |
 | OpenCode v2 | `/<skill>` | 原生 skill slash 目錄；不安裝 shim，避免重複項目 |
 
@@ -63,7 +99,7 @@ canonical skill 的唯一來源仍是 `commands-src/<name>/`；不要直接編�
 請使用 funny-text-rewriter 改寫：The meeting starts at 9 AM. Please don't be late.
 ```
 
-## 更新行為
+## 可選的叫用時更新提示
 
 技能執行前至多每小時以 `git ls-remote` 檢查一次。發現更新時，AI 必須先詢問；同意才執行 `bin/apply-update.sh`。拒絕後預設七天不再詢問。可用以下環境變數調整：
 
@@ -71,7 +107,10 @@ canonical skill 的唯一來源仍是 `commands-src/<name>/`；不要直接編�
 | --- | ---: | --- |
 | `SKILL_X_CHECK_INTERVAL_SECONDS` | `3600` | 遠端檢查節流秒數 |
 | `SKILL_X_SNOOZE_DAYS` | `7` | 拒絕後延後天數 |
-| `SKILL_X_STATE_DIR` | `~/.skill-x-starter-state` | 本機狀態目錄 |
+| `SKILL_X_STATE_DIR` | checkout 專屬狀態目錄 | 舊版叫用時檢查的覆寫目錄 |
+
+此提示只是便利功能；`bin/skill-x status` 與 `update` 才是權威機制，且不同 checkout
+的生命週期狀態以 installation ID 分隔。
 
 ## 容器 / 雲端 image
 

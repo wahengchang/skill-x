@@ -81,11 +81,12 @@ bin/build.sh                   產生部署版
 bin/update-check               節流遠端檢查
 bin/apply-update.sh            fast-forward 更新與重新同步
 bin/snooze.sh                  延後提醒
-bin/sync-skills.sh             個人電腦 symlink
+bin/sync-skills.sh             舊版全部目標 symlink 底層工具
+bin/skill-x                    manifest 驅動的 install/status/update/sync/uninstall 入口
 bin/opencode-version.sh        OpenCode v1/v2 判定與覆寫
 bin/cloud-bootstrap.sh         image 固定版本複製
 bin/doctor.sh                  目標路徑診斷
-install.sh                     安裝入口
+install.sh                     委派給 bin/skill-x 的相容安裝入口
 tests/run.sh                   不需網路的整合測試
 ```
 

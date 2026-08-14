@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+STATE_ROOT=${SKILL_X_STATE_ROOT:-"$HOME/.local/state/skill-x"}
+INSTALL_ID=${SKILL_X_INSTALL_ID:-$(printf %s "$ROOT" | cksum | awk '{print $1}')}
+STATE_DIR="$STATE_ROOT/$INSTALL_ID"
+MANIFEST="$STATE_DIR/install.json"
+DEFAULT_AGENTS=claude,codex,opencode
+
+usage() {
+  cat <<'EOF'
+Usage: skill-x <command> [options]
+  init|install [--agents claude,codex,opencode]
+  sync [--agents claude,codex,opencode]
+  status [--json]
+  doctor [--strict] [--json]
+  update [--check|--yes]
+  uninstall [--agents claude,codex,opencode] [--remove-checkout]
+EOF
+}
+
+manifest_value() {
+  local key=$1
+  [[ -f "$MANIFEST" ]] || return 1
+  python3 - "$MANIFEST" "$key" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]))
+for part in sys.argv[2].split('.'):
+    v=v[part]
+print(','.join(v) if isinstance(v,list) else v)
+PY
+}
+
+parse_agents() {
+  local value=${1:-$DEFAULT_AGENTS} item
+  AGENTS=()
+  IFS=, read -ra requested <<< "$value"
+  for item in "${requested[@]}"; do
+    case "$item" in claude|codex|opencode) AGENTS+=("$item");; *) echo "Unknown agent: $item" >&2; exit 2;; esac
+  done
+  ((${#AGENTS[@]})) || { echo 'At least one agent is required.' >&2; exit 2; }
+}
+
+agent_target() {
+  case "$1" in
+    claude) printf '%s' "$HOME/.claude/skills";;
+    codex) printf '%s' "$HOME/.agents/skills";;
+    opencode) printf '%s' "$HOME/.config/opencode/skills";;
+  esac
+}
+
+agent_version() {
+  local command=$1
+  [[ "$command" == claude ]] && command=claude
+  command -v "$command" >/dev/null 2>&1 && "$command" --version 2>/dev/null | head -n1 || printf 'not-installed'
+}
+
+sync_selected() {
+  local agent target skill name link mode
+  "$ROOT/bin/build.sh" >/dev/null
+  mode=$({ SKILL_X_OPENCODE_VERSION=${SKILL_X_OPENCODE_VERSION:-auto} "$ROOT/bin/opencode-version.sh"; } 2>/dev/null)
+  MANAGED=()
+  for agent in "${AGENTS[@]}"; do
+    target=$(agent_target "$agent"); mkdir -p "$target"
+    while IFS= read -r -d '' skill; do
+      name=$(basename "$skill"); link="$target/$name"
+      if [[ -L "$link" ]]; then ln -sfn "$skill" "$link"
+      elif [[ -e "$link" ]]; then echo "WARNING: preserving collision: $link" >&2; continue
+      else ln -s "$skill" "$link"; fi
+      MANAGED+=("$link|$skill|symlink")
+    done < <(find "$ROOT/commands" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+  done
+  if [[ " ${AGENTS[*]} " == *' opencode '* && "$mode" == v1 ]]; then
+    target="$HOME/.config/opencode/commands"; mkdir -p "$target"
+    while IFS= read -r -d '' skill; do
+      name=$(basename "$skill"); link="$target/$name"
+      if [[ -L "$link" ]]; then ln -sfn "$skill" "$link"
+      elif [[ -e "$link" ]]; then echo "WARNING: preserving collision: $link" >&2; continue
+      else ln -s "$skill" "$link"; fi
+      MANAGED+=("$link|$skill|symlink")
+    done < <(find "$ROOT/opencode-commands" -type f -maxdepth 1 -name '*.md' -print0 | sort -z)
+  fi
+  OPENCODE_MODE=$mode
+}
+
+write_manifest() {
+  mkdir -p "$STATE_DIR"
+  local commit remote now; commit=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
+  remote=$(git -C "$ROOT" remote get-url origin 2>/dev/null || echo unknown); now=$(date -u +%FT%TZ)
+  local agents_file paths_file
+  agents_file=$(mktemp); paths_file=$(mktemp)
+  printf '%s\n' "${AGENTS[@]}" > "$agents_file"; printf '%s\n' "${MANAGED[@]}" > "$paths_file"
+  python3 - "$MANIFEST" "$INSTALL_ID" "$ROOT" "$remote" "$commit" "$OPENCODE_MODE" "$now" "$agents_file" "$paths_file" <<'PY'
+import json,os,sys
+out,iid,root,remote,commit,mode,now,af,pf=sys.argv[1:]
+agents=[x.strip() for x in open(af) if x.strip()]
+paths=[]
+for line in open(pf):
+ p,t,k=line.rstrip('\n').split('|',2); paths.append({'path':p,'target':t,'type':k})
+old={}
+try: old=json.load(open(out))
+except (OSError,ValueError): pass
+data={'schema_version':1,'installation_id':iid,'repository_url':remote,'checkout_path':root,
+      'installed_commit':commit,'selected_agents':agents,'detected_versions':{},
+      'managed_paths':paths,'opencode_mode':mode,'last_successful_install':old.get('last_successful_install',now),
+      'last_successful_sync':now,'last_successful_update':old.get('last_successful_update')}
+for a in agents:
+ import shutil,subprocess
+ exe=shutil.which(a)
+ data['detected_versions'][a]=subprocess.run([exe,'--version'],text=True,capture_output=True).stdout.splitlines()[0] if exe else 'not-installed'
+tmp=out+'.tmp'; open(tmp,'w').write(json.dumps(data,indent=2,sort_keys=True)+'\n'); os.replace(tmp,out)
+PY
+  rm -f "$agents_file" "$paths_file"
+}
+
+git_state() {
+  [[ -d "$ROOT/.git" ]] || { echo unreachable; return; }
+  [[ -z $(git -C "$ROOT" status --porcelain) ]] || { echo dirty; return; }
+  local upstream counts ahead behind
+  upstream=$(git -C "$ROOT" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null) || { echo unreachable; return; }
+  counts=$(git -C "$ROOT" rev-list --left-right --count HEAD..."$upstream" 2>/dev/null) || { echo unreachable; return; }
+  read -r ahead behind <<< "$counts"
+  if ((ahead && behind)); then echo diverged; elif ((behind)); then echo behind; elif ((ahead)); then echo ahead; else echo current; fi
+}
+
+path_health_json() {
+  python3 - "$MANIFEST" <<'PY'
+import json,os,sys
+d=json.load(open(sys.argv[1])); out=[]
+for x in d['managed_paths']:
+ p=x['path']; expected=x['target']
+ if not os.path.lexists(p): state='missing'
+ elif os.path.islink(p) and os.readlink(p)==expected and os.path.exists(expected): state='healthy'
+ elif os.path.islink(p): state='stale'
+ else: state='foreign'
+ out.append(dict(x,state=state))
+print(json.dumps(out,sort_keys=True))
+PY
+}
+
+status_cmd() {
+  local json=${1:-false}
+  [[ -f "$MANIFEST" ]] || { echo "No installation manifest. Run: $ROOT/bin/skill-x install" >&2; return 1; }
+  local recorded state paths commit upstream
+  recorded=$(manifest_value checkout_path); paths=$(path_health_json)
+  if [[ "$recorded" != "$ROOT" ]]; then state=unreachable
+  else
+    git -C "$ROOT" fetch --quiet 2>/dev/null || true
+    state=$(git_state)
+  fi
+  commit=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
+  upstream=$(git -C "$ROOT" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo unknown)
+  if [[ "$json" == true ]]; then
+    python3 - "$MANIFEST" "$state" "$commit" "$upstream" "$paths" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[1])); paths=json.loads(sys.argv[5])
+print(json.dumps({'schema_version':1,'installation_id':d['installation_id'],'checkout_path':d['checkout_path'],
+'local_commit':sys.argv[3],'tracked_upstream':sys.argv[4],'state':sys.argv[2],
+'update_available':sys.argv[2] in ('behind','diverged'),'selected_agents':d['selected_agents'],
+'detected_versions':d['detected_versions'],'installed_skills':sorted({x['path'].rstrip('/').split('/')[-1].removesuffix('.md') for x in paths}),
+'managed_paths':paths},sort_keys=True))
+PY
+  else
+    echo "skill-x: $state"; echo "Checkout: $recorded"; echo "Commit: $commit"; echo "Upstream: $upstream"
+    python3 - "$MANIFEST" "$paths" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[1])); paths=json.loads(sys.argv[2])
+print('Agents: '+', '.join(d['selected_agents']))
+for x in paths: print(f"  {x['state'].upper():7} {x['path']}")
+print('Invoke: Claude /<skill>; Codex $<skill> or /skills; OpenCode /<skill>')
+PY
+    [[ "$recorded" == "$ROOT" ]] || echo "Repair moved checkout: run $ROOT/bin/skill-x sync"
+  fi
+}
+
+install_cmd() {
+  local value=$DEFAULT_AGENTS
+  while (($#)); do case "$1" in --agents) value=${2:?}; shift 2;; *) echo "Unknown option: $1" >&2; exit 2;; esac; done
+  parse_agents "$value"; sync_selected; write_manifest
+  echo "Installed skill-x for: ${AGENTS[*]}"
+  echo "Next: $ROOT/bin/skill-x status"
+  echo 'Invoke: Claude /<skill>; Codex $<skill> or /skills; OpenCode /<skill>'
+}
+
+doctor_cmd() {
+  local strict=false json=false
+  while (($#)); do case "$1" in --strict) strict=true;; --json) json=true;; *) exit 2;; esac; shift; done
+  local out rc=0; out=$(status_cmd "$json") || rc=$?
+  [[ -f "$MANIFEST" ]] && python3 - "$MANIFEST" <<'PY' || rc=1
+import json,os,sys
+for x in json.load(open(sys.argv[1]))['managed_paths']:
+ if not (os.path.islink(x['path']) and os.readlink(x['path'])==x['target'] and os.path.exists(x['target'])): sys.exit(1)
+PY
+  printf '%s\n' "$out"; [[ "$strict" == false ]] || return "$rc"
+}
+
+update_cmd() {
+  local check=false yes=false
+  while (($#)); do case "$1" in --check) check=true;; --yes) yes=true;; *) exit 2;; esac; shift; done
+  git -C "$ROOT" fetch --quiet || { echo 'Unable to fetch upstream.' >&2; return 1; }
+  local state; state=$(git_state); echo "Update state: $state"
+  [[ "$check" == true || "$state" == current || "$state" == ahead ]] && return 0
+  [[ "$state" == behind ]] || { echo 'Refusing update: checkout is dirty, diverged, or unreachable.' >&2; return 1; }
+  [[ "$yes" == true ]] || { echo 'Preview only. Re-run with --yes to fast-forward.'; git -C "$ROOT" diff --name-only HEAD..'@{upstream}' | sed -n 's#^commands-src/\([^/]*\)/.*#  skill: \1#p' | sort -u; return 0; }
+  git -C "$ROOT" merge --ff-only '@{upstream}'
+  parse_agents "$(manifest_value selected_agents)"; sync_selected; write_manifest
+  python3 - "$MANIFEST" <<'PY'
+import json,datetime,sys
+p=sys.argv[1]; d=json.load(open(p)); d['last_successful_update']=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'); open(p,'w').write(json.dumps(d,indent=2,sort_keys=True)+'\n')
+PY
+  doctor_cmd --strict >/dev/null; echo 'Update complete.'
+}
+
+uninstall_cmd() {
+  local remove=false filter=
+  while (($#)); do case "$1" in --remove-checkout) remove=true; shift;; --agents) filter=${2:?}; shift 2;; *) exit 2;; esac; done
+  [[ -f "$MANIFEST" ]] || { echo 'No installation manifest.' >&2; return 1; }
+  FILTER=$filter python3 - "$MANIFEST" <<'PY'
+import json,os,sys
+d=json.load(open(sys.argv[1])); filt=set(filter(None,os.environ.get('FILTER','').split(',')))
+roots={'claude':os.path.expanduser('~/.claude/skills'),'codex':os.path.expanduser('~/.agents/skills'),'opencode':os.path.expanduser('~/.config/opencode')}
+for x in d['managed_paths']:
+ if filt and not any(x['path'].startswith(roots[a]+'/') for a in filt): continue
+ p=x['path']
+ if os.path.islink(p) and os.readlink(p)==x['target']: os.unlink(p); print('Removed '+p)
+PY
+  if [[ -z "$filter" ]]; then rm -f "$MANIFEST"; rmdir "$STATE_DIR" 2>/dev/null || true; fi
+  if [[ "$remove" == true ]]; then
+    [[ -z $(git -C "$ROOT" status --porcelain) ]] || { echo 'Refusing to remove dirty checkout.' >&2; return 1; }
+    cd /; rm -rf -- "$ROOT"
+  else echo "Checkout kept: $ROOT"; fi
+}
+
+cmd=${1:-}; shift || true
+case "$cmd" in init|install) install_cmd "$@";; sync) if (($#)); then install_cmd "$@"; else parse_agents "$(manifest_value selected_agents)"; sync_selected; write_manifest; echo 'Synchronization complete.'; fi;; status) [[ ${1:-} == --json ]] && status_cmd true || status_cmd false;; doctor) doctor_cmd "$@";; update) update_cmd "$@";; uninstall) uninstall_cmd "$@";; -h|--help|help) usage;; *) usage >&2; exit 2;; esac
