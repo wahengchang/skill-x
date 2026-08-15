@@ -129,34 +129,59 @@ opencode_mode() { "$ROOT/bin/opencode-version.sh"; }
 # Sync
 # ---------------------------------------------------------------------------
 
+# Print the target previously recorded for a managed symlink path. Presence in
+# the manifest is the ownership proof; a matching name or target prefix alone is
+# never enough to claim an existing path.
+manifest_expected_target() {
+  local wanted=$1 agent kind path target
+  [[ -f "$MANIFEST" ]] || return 1
+  while IFS=$'\t' read -r agent kind path target; do
+    if [[ "$kind" == symlink && "$path" == "$wanted" ]]; then
+      printf '%s\n' "$target"
+      return 0
+    fi
+  done < <(sx_manifest_entries "$MANIFEST")
+  return 1
+}
+
 link_or_warn() {
-  local target=$1 link=$2
+  local target=$1 link=$2 linked previous=""
   if [[ -L "$link" ]]; then
-    ln -sfn "$target" "$link"
+    linked=$(readlink "$link")
+    if previous=$(manifest_expected_target "$link"); then
+      if [[ "$linked" == "$previous" ]]; then
+        [[ "$linked" == "$target" ]] || ln -sfn "$target" "$link"
+      elif [[ "$linked" != "$target" ]]; then
+        echo "WARNING: preserving foreign symlink: $link -> $linked" >&2
+      fi
+      # Keep the path in the new manifest even when it became foreign so doctor
+      # can continue to diagnose it and uninstall will continue to preserve it.
+      return 0
+    fi
+    echo "WARNING: preserving unowned symlink: $link -> $linked" >&2
+    return 1
   elif [[ -e "$link" ]]; then
-    echo "WARNING: skipping non-symlink path: $link" >&2
+    if manifest_expected_target "$link" >/dev/null; then
+      echo "WARNING: preserving foreign path that replaced a managed symlink: $link" >&2
+      return 0
+    fi
+    echo "WARNING: skipping unowned non-symlink path: $link" >&2
     return 1
   else
     ln -s "$target" "$link"
   fi
 }
 
-# Remove command files this installation generated. Symlinks are recognised by
-# their target, pinned copies by the managed marker, so user-owned commands of
-# the same name survive both.
+# Remove command files this installation generated. Symlink ownership comes
+# only from the manifest; regular pinned copies use the managed marker.
 remove_managed_commands() {
-  local dir=$1 keep_live=$2 path linked
+  local dir=$1 keep_live=$2 path linked previous
   [[ -d "$dir" ]] || return 0
   while IFS= read -r -d '' path; do
     if [[ -L "$path" ]]; then
       linked=$(readlink "$path")
-      if [[ -n "$COMMAND_SOURCE" && "$linked" == "$COMMAND_SOURCE"/* ]]; then
-        :
-      elif grep -q "$SKILL_X_MANAGED_MARKER" "$path" 2>/dev/null; then
-        :
-      else
-        continue
-      fi
+      previous=$(manifest_expected_target "$path" 2>/dev/null || true)
+      [[ -n "$previous" && "$linked" == "$previous" ]] || continue
       if [[ "$keep_live" == keep-live && -f "$linked" ]]; then continue; fi
     elif [[ -f "$path" ]]; then
       [[ "$keep_live" == keep-live ]] && continue
@@ -175,7 +200,7 @@ sync_agents() {
   local agents=$1 entries_out=$2
   [[ -d "$SOURCE" ]] || sx_die "no built skills in $SOURCE; run bin/build.sh first"
 
-  local agent consumer target link skill name linked mode entry adapter artifact script
+  local agent consumer target link skill name linked mode entry adapter artifact script previous
   : > "$entries_out"
 
   for entry in "${CANONICAL_CONSUMERS[@]}"; do
@@ -201,13 +226,19 @@ sync_agents() {
       printf '%s\t%s\t%s\t%s\n' "$agent" symlink "$link" "$skill" >> "$entries_out"
     done < <(find "$SOURCE" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
 
-    # Links we manage that now point at a skill removed from the canonical
-    # artifact tree.
+    # Remove a stale canonical link only when the prior manifest still proves
+    # this exact symlink was ours. Foreign links are never inferred from target
+    # prefixes, even when they point into this checkout.
     while IFS= read -r -d '' link; do
       linked=$(readlink "$link")
       if [[ "$linked" == "$SOURCE"/* && ! -d "$linked" ]]; then
-        rm "$link"
-        echo "Removed stale link: $link" >&2
+        previous=$(manifest_expected_target "$link" 2>/dev/null || true)
+        if [[ -n "$previous" && "$linked" == "$previous" ]]; then
+          rm "$link"
+          echo "Removed stale link: $link" >&2
+        else
+          echo "WARNING: preserving foreign stale symlink: $link -> $linked" >&2
+        fi
       fi
     done < <(find "$target" -mindepth 1 -maxdepth 1 -type l -print0)
   done
@@ -489,7 +520,7 @@ cmd_status() {
   local -a rows=()
   while IFS=$'\t' read -r state agent path detail; do
     [[ -n "$path" ]] || continue
-    rows+=("$state	$agent	$path	$detail")
+    rows+=("$state\t$agent\t$path\t$detail")
     case "$state" in
       ok) ok=$((ok + 1)) ;;
       missing) missing=$((missing + 1)) ;;
@@ -781,6 +812,33 @@ clear_update_throttle() {
   rm -f "$dir/last-check" "$dir/snooze-until"
 }
 
+# Return success when deleting the checkout would discard local content. Normal
+# tracked/untracked changes always block. Ignored files also block unless they
+# live under one of the registered disposable artifact roots produced by build.
+checkout_has_local_content() {
+  local root=$1 status path allowed skip entry
+  status=$(git -C "$root" status --porcelain --untracked-files=all 2>/dev/null) || return 0
+  [[ -n "$status" ]] && return 0
+
+  local -a disposable=("$CANONICAL_DEST")
+  for entry in "${TRANSFORMED_TARGETS[@]}"; do
+    disposable+=("${entry##*:}")
+  done
+
+  while IFS= read -r -d '' path; do
+    skip=0
+    for allowed in "${disposable[@]}"; do
+      allowed=${allowed%/}
+      if [[ "$path" == "$allowed" || "$path" == "$allowed/"* ]]; then
+        skip=1
+        break
+      fi
+    done
+    (( skip )) || return 0
+  done < <(git -C "$root" ls-files --others --ignored --exclude-standard -z 2>/dev/null)
+  return 1
+}
+
 cmd_uninstall() {
   local explicit="" remove_checkout=0 assume_yes=0
   while (( $# )); do
@@ -798,10 +856,10 @@ cmd_uninstall() {
 
   # Checked before anything is removed: a refusal here must leave the whole
   # installation intact, not a half-uninstalled one.
-  if (( remove_checkout )) && sx_git_has_local_content "$ROOT"; then
+  if (( remove_checkout )) && checkout_has_local_content "$ROOT"; then
     sx_die "refusing to delete a dirty checkout at $ROOT
-  Commit, stash or discard your local changes first (untracked files count):
-    git -C $ROOT status --short"
+  Commit, stash or remove local content first (tracked, untracked, and non-generated ignored files count):
+    git -C $ROOT status --short --ignored"
   fi
 
   local selected=""
