@@ -372,10 +372,12 @@ sx_git_dirty() {
   [[ -n "$status" ]]
 }
 
-# Anything git would lose if the checkout were deleted, untracked files included.
+# Anything git would lose if the checkout were deleted, including ignored local
+# files. Callers that intentionally allow disposable ignored artifacts should
+# apply their own allowlist before deleting a checkout.
 sx_git_has_local_content() {
   local status
-  status=$(git -C "$1" status --porcelain --untracked-files=normal 2>/dev/null) || return 1
+  status=$(git -C "$1" status --porcelain --untracked-files=all --ignored=matching 2>/dev/null) || return 1
   [[ -n "$status" ]]
 }
 
