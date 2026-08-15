@@ -57,8 +57,97 @@ EOF
   HOME="$home" "$project/bin/sync-skills.sh" >/dev/null
   local link="$home/.custom-agent/skills/example-skill"
   [[ -L "$link" ]]
-  [[ "$(cd "$(dirname "$(readlink "$link")")" && pwd -P)/$(basename "$(readlink "$link")")" == \
-     "$project/generated-canonical/example-skill" ]]
+  [[ "$(cd "$(readlink "$link")" && pwd -P)" == \
+     "$(cd "$project/generated-canonical/example-skill" && pwd -P)" ]]
+}
+
+test_rejects_unsafe_artifact_destinations_without_damage() {
+  local project="$TEST_ROOT/unsafe-path" victim="$TEST_ROOT/victim"
+  copy_project "$project"
+  mkdir -p "$victim"
+  echo sentinel > "$victim/keep"
+  sed -i.bak 's/CANONICAL_DEST="commands"/CANONICAL_DEST="..\/victim"/' "$project/bin/targets/targets.conf"
+  rm "$project/bin/targets/targets.conf.bak"
+  ! "$project/bin/build.sh" >"$project/out" 2>"$project/err"
+  rg -q 'Invalid CANONICAL_DEST' "$project/err"
+  [[ $(cat "$victim/keep") == sentinel ]]
+
+  for value in /tmp/absolute . ''; do
+    sed "s|CANONICAL_DEST=.*|CANONICAL_DEST=\"$value\"|" "$PROJECT_ROOT/bin/targets/targets.conf" > "$project/bin/targets/targets.conf"
+    ! "$project/bin/build.sh" >/dev/null 2>&1
+  done
+
+  # Duplicate and parent/child destinations are rejected by the shared validator.
+  (
+    ROOT="$project"
+    source "$project/bin/lib/targets.sh"
+    CANONICAL_DEST=commands
+    TRANSFORMED_TARGETS=("probe:commands")
+    ! skill_x_validate_artifact_paths >/dev/null 2>&1
+    TRANSFORMED_TARGETS=("probe:commands/child")
+    ! skill_x_validate_artifact_paths >/dev/null 2>&1
+  )
+}
+
+test_custom_artifacts_are_gitignored() {
+  local project="$TEST_ROOT/custom-ignore"
+  copy_project "$project"
+  sed -i.bak 's/CANONICAL_DEST="commands"/CANONICAL_DEST="generated-canonical"/; s/:opencode-commands"/:generated-shims"/' "$project/bin/targets/targets.conf"
+  rm "$project/bin/targets/targets.conf.bak"
+  git -C "$project" init -q
+  git -C "$project" add . && git -C "$project" -c user.name=test -c user.email=test@example.invalid commit -qm base
+  "$project/bin/build.sh" >/dev/null
+  [[ -z $(git -C "$project" status --short) ]]
+}
+
+test_destination_migration_removes_only_managed_links() {
+  local project="$TEST_ROOT/migration" home="$TEST_ROOT/migration-home"
+  copy_project "$project"
+  mkdir -p "$project/commands-src/removed"
+  cp "$project/commands-src/example-skill/SKILL.md" "$project/commands-src/removed/SKILL.md"
+  "$project/bin/build.sh" >/dev/null
+  HOME="$home" "$project/bin/sync-skills.sh" >/dev/null
+  local target="$home/.claude/skills"
+  echo owned > "$target/user-file"
+  ln -s "$TEST_ROOT/unrelated" "$target/user-link"
+  rm -rf "$project/commands-src/removed"
+  sed -i.bak 's/CANONICAL_DEST="commands"/CANONICAL_DEST="new-commands"/' "$project/bin/targets/targets.conf"
+  rm "$project/bin/targets/targets.conf.bak"
+  "$project/bin/build.sh" >/dev/null
+  HOME="$home" "$project/bin/sync-skills.sh" >/dev/null 2>/dev/null
+  [[ ! -L "$target/removed" && -f "$target/user-file" && -L "$target/user-link" ]]
+}
+
+test_destination_migration_isolates_checkouts() {
+  local a="$TEST_ROOT/checkout-a" b="$TEST_ROOT/checkout-b" home="$TEST_ROOT/checkouts-home"
+  copy_project "$a"
+  mkdir -p "$a/commands-src/only-in-a"
+  cp "$a/commands-src/example-skill/SKILL.md" "$a/commands-src/only-in-a/SKILL.md"
+  "$a/bin/build.sh" >/dev/null
+  HOME="$home" "$a/bin/sync-skills.sh" >/dev/null
+
+  copy_project "$b"
+  "$b/bin/build.sh" >/dev/null
+  HOME="$home" "$b/bin/sync-skills.sh" >/dev/null
+
+  # A skill present only in checkout A must survive checkout B's sync: the
+  # per-installation manifest must not let checkout B claim A's managed link.
+  [[ -L "$home/.claude/skills/only-in-a" ]]
+  [[ "$(cd "$(readlink "$home/.claude/skills/only-in-a")" && pwd -P)" == \
+     "$(cd "$a/commands/only-in-a" && pwd -P)" ]]
+}
+
+test_doctor_reads_canonical_consumers_from_metadata() {
+  local project="$TEST_ROOT/doctor" home="$TEST_ROOT/doctor-home"
+  copy_project "$project"
+  awk '/CANONICAL_CONSUMERS=\(/ { print; print "  \"probe:~/.probe/skills\""; next } { print }' \
+    "$project/bin/targets/targets.conf" > "$project/bin/targets/targets.conf.new"
+  mv "$project/bin/targets/targets.conf.new" "$project/bin/targets/targets.conf"
+  "$project/bin/build.sh" >/dev/null
+  HOME="$home" "$project/bin/sync-skills.sh" >/dev/null 2>/dev/null
+  HOME="$home" "$project/bin/doctor.sh" > "$project/doctor.out"
+  rg -qF "$home/.probe/skills" "$project/doctor.out"
+  rg -q 'OpenCode v1' "$project/doctor.out"
 }
 
 test_cloud_bootstrap_supports_legacy_pinned_ref() {
@@ -109,6 +198,11 @@ EOF
 }
 
 test_configured_canonical_dest_and_adapter_contract
+test_rejects_unsafe_artifact_destinations_without_damage
+test_custom_artifacts_are_gitignored
+test_destination_migration_removes_only_managed_links
+test_destination_migration_isolates_checkouts
+test_doctor_reads_canonical_consumers_from_metadata
 test_cloud_bootstrap_supports_legacy_pinned_ref
 
 echo 'PR #15 regression tests: PASS'
