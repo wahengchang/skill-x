@@ -9,10 +9,14 @@ commands-src/ ───┐
 _shared/      ───┼── bin/build.sh ──> commands/         (gitignored artifact)
 bin/targets/  ───┘          │      └─> opencode-commands/ (gitignored artifact)
                               │
-                              ├─ install.sh          ──> bin/build.sh + bin/sync-skills.sh
-                              ├─ bin/apply-update.sh ──> git pull --ff-only + build + sync
+                              ├─ skill-x install ──> build + sync + manifest
+                              ├─ skill-x update  ──> fetch + fast-forward + build + sync + doctor
                               └─ bin/cloud-bootstrap ──> clone pinned ref + build + cp
 ```
+
+`bin/skill-x` 是使用者面對的唯一入口（init / install / sync / status / doctor /
+update / uninstall）。`install.sh`、`bin/sync-skills.sh`、`bin/doctor.sh`、
+`bin/apply-update.sh` 保留為轉呼叫用的相容包裝。
 
 ## 詞彙表
 
@@ -25,7 +29,9 @@ bin/targets/  ───┘          │      └─> opencode-commands/ (gitigno
 | **generated artifact** | `bin/build.sh` 產生的 disposable artifact tree，列在 `.gitignore`。`commands/`、`opencode-commands/`，以及未來任何新增的 transform 產物。 |
 | **canonical-format consumer** | 直接讀取 `commands/<name>/SKILL.md` 不需轉換的 runtime；由 `CANONICAL_CONSUMERS` 描述。 |
 | **transform adapter** | 把 common build 完成後的 canonical artifact 轉成另一個 runtime 需要的 wire format 的腳本，位於 `bin/targets/<adapter>.sh`。 |
-| **sync / distribute** | `bin/sync-skills.sh` 與 `bin/cloud-bootstrap.sh` 負責把 build 出的 artifact 部署到目標路徑；它們不是 build pipeline 的一部分。 |
+| **sync / distribute** | `bin/skill-x sync` 與 `bin/cloud-bootstrap.sh` 負責把 build 出的 artifact 部署到目標路徑；它們不是 build pipeline 的一部分。 |
+| **installation manifest** | `~/.local/state/skill-x/<id>/install.json`，記錄某個 checkout 部署了什麼。status／doctor／uninstall 都以它為準。 |
+| **managed entry** | manifest 記錄、由 skill-x 建立的單一路徑（目前都是 symlink）。沒被記錄的同名檔案一律視為使用者所有。 |
 | **command shim** | 產生於 `opencode-commands/<name>.md` 的薄層 command 檔，只為 OpenCode v1 補上 `/<name>`；它叫 OpenCode 用 `skill` 工具載入 canonical skill，不含技能內容。 |
 
 raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 產生 canonical skill，之後才進入既有 build 與 sync 流程。canonicalizer 是 framework 的開發工具，不是 canonical skill set 的成員，因此不會建置到 `commands/` 或分發給各 AI agents。v1 不做近似重複的自動偵測；來源專案或原始 prompt 也不強制寫入，以免為單人維護增加不必要的 metadata。
@@ -33,17 +39,19 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 ## 關鍵決策
 
 1. **共同格式**：一個技能一個資料夾，以含 YAML frontmatter 的 `SKILL.md` 作為三個工具的最大公約數。
-2. **內容一致**：暫不為工具分支；真正出現差異需求時才加入條件或子目錄。技能**內容**不分支，只有「叫用管道」按工具補齊（決策 #9）。
+2. **內容一致**：暫不為工具分支；真正出現差異需求時才加入條件或子目錄。技能**內容**不分支，只有「叫用管道」按工具補齊（決策 #11）。
 3. **自建分發**：不使用單一工具的 marketplace，以一致的 update-check、詢問與 symlink 流程換取跨工具一致體驗。
 4. **按需檢查**：技能呼叫時檢查，預設一小時節流，不執行 daemon。
 5. **更新需同意**：個人電腦永不靜默更新；拒絕後預設延後七天。
 6. **不可變 image**：build 時由使用者自己的 CI/建置環境提供 private repo 認證，固定 ref 並複製檔案；runtime 不依賴 Git。pinned ref 不需要夾帶 artifact，bootstrap 會就地 build。
 7. **build input 入庫，artifact 為 disposable**：個人 clone 或 image build 不必預先夾帶 `commands/` 或 `opencode-commands/`；一律從 source 重新生成。
 8. **雙版本節奏**：個人電腦 rolling，image pinned。
-9. **叫用管道按工具補齊**：Claude Code 與 Codex 從 skills 目錄自動產生 `/<skill>` 與 `$<skill>`，OpenCode v2 也有原生 slash 目錄，只有 OpenCode v1 需要額外的 command 檔案。因此只為 v1 產生 shim，其餘工具不產生任何重複項目，也不安裝 Codex 已棄用的 custom prompts。
-10. **共用支援檔以 symlink 收斂、以複製部署**：一組技能若共用同一份腳本，作者版只保留一份（`commands-src/_x-shared/`），各技能以 symlink 指過去；`bin/build.sh` 用 `find -L` 與 `cp -aL` 解引用，讓 `commands/<name>/` 得到真實副本。這是必要的：技能是各自 symlink 進 `~/.claude/skills/<name>` 的，執行期無法保證讀得到兄弟技能的檔案，所以部署版必須自給自足。決策 #2（內容不分支）仍然成立——收斂的是**來源**，不是內容。
-11. **開發週期狀態一律 project-local**：`x-*` 技能組的所有執行期狀態放在 repo 內的 `.dev-hub/`，不使用 `~/.x-*` 或系統 `/tmp`。`active/`、`worktrees/`、`runtime/` 由 `xdh` 自動加進 `.gitignore`；只有 `logs/` 進 Git。理由是可稽核與可丟棄：一個 Cycle 的全部痕跡都能用一般 Git 指令檢視或清掉，換機器也不會帶著看不見的全域狀態。
-12. **target 擴充走 metadata + adapter**：加新 runtime 時，讀 canonical `SKILL.md` 的加進 `CANONICAL_CONSUMERS`、需要不同表示的加 adapter 腳本並登記到 `TRANSFORMED_TARGETS`。build pipeline 不需要改。
+9. **生命週期由 CLI 擁有**：安裝狀態寫進 per-installation 的 manifest，而不是靠掃描家目錄猜測。這是「只移除自己建立的東西」「搬移 checkout 可診斷、可修復」「未選的 agent 不留痕跡」三件事的共同前提。
+10. **更新一律先 fetch**：只比對本地 HEAD 與遠端 HEAD（或過期的 remote-tracking ref）會讓安裝在無聲中落後；`status` 與 `update` 都先 fetch 追蹤中的 upstream 再判斷。
+11. **叫用管道按工具補齊**：Claude Code 與 Codex 從 skills 目錄自動產生 `/<skill>` 與 `$<skill>`，OpenCode v2 也有原生 slash 目錄，只有 OpenCode v1 需要額外的 command 檔案。因此只為 v1 產生 shim，其餘工具不產生任何重複項目，也不安裝 Codex 已棄用的 custom prompts。
+12. **共用支援檔以 symlink 收斂、以複製部署**：一組技能若共用同一份腳本，作者版只保留一份（`commands-src/_x-shared/`），各技能以 symlink 指過去；`bin/build.sh` 用 `find -L` 與 `cp -aL` 解引用，讓 `commands/<name>/` 得到真實副本。這是必要的：技能是各自 symlink 進 `~/.claude/skills/<name>` 的，執行期無法保證讀得到兄弟技能的檔案，所以部署版必須自給自足。決策 #2（內容不分支）仍然成立——收斂的是**來源**，不是內容。
+13. **開發週期狀態一律 project-local**：`x-*` 技能組的所有執行期狀態放在 repo 內的 `.dev-hub/`，不使用 `~/.x-*` 或系統 `/tmp`。`active/`、`worktrees/`、`runtime/` 由 `xdh` 自動加進 `.gitignore`；只有 `logs/` 進 Git。理由是可稽核與可丟棄：一個 Cycle 的全部痕跡都能用一般 Git 指令檢視或清掉，換機器也不會帶著看不見的全域狀態。
+14. **target 擴充走 metadata + adapter**：加新 runtime 時，讀 canonical `SKILL.md` 的加進 `CANONICAL_CONSUMERS`、需要不同表示的加 adapter 腳本並登記到 `TRANSFORMED_TARGETS`。build pipeline 不需要改。
 
 ## 核心機制
 
@@ -97,24 +105,35 @@ adapter 的 action contract 固定為：`build <canonical-staging-dir> <artifact
 - **機器可讀記錄一律 TSV。** 路徑會含空白（macOS 的 `My Projects`、`Mobile Documents` 是常態），所以以空白分隔的記錄不是格式而是陷阱：`clean apply` 曾用 `read -r _ class kind target rest` 解析，repo 位於 `/home/u/proj v2/` 時 `target` 被截成 `/home/u/proj`，dirty 護欄因為 `git -C <截斷路徑>` 失敗而靜默通過，`rm -rf` 則打到一個真實存在的同層目錄。現在 `clean scan`、`worktree list` 與 `pr` 查詢一律 tab 分隔、以 `IFS=$'\t'` 讀取；刪除前另有一道與解析無關的收容檢查，確保任何 kind 都只能刪到它該待的目錄底下。
 - **standalone scope 必須是固定路徑。** 沒有 Cycle 時，規劃文件的 scope 曾用 `xdh runtime new` 產生帶秒級時間戳的目錄，等於每次呼叫都換一個位置：reuse 掃描永遠掃到空的、ID 每次從 001 重來、跨分鐘重跑會替同一個 slug 生出第二條 branch 與第二個 worktree，而且鎖開在那個每次都不同的目錄裡——standalone 模式根本沒有互斥。現在固定為 `.dev-hub/runtime/standalone/`，Cycle 模式與 standalone 模式走同一套 reuse／配號／上鎖邏輯。相對的，`clean scan` 也必須知道「含有未終結 WG／work item 的 runtime 目錄是活的」，否則保留期一過就會把還開著的 Work Group 刪掉。work item 與 WG 的終結狀態不同（前者 done/cancelled/deferred，後者 merged/closed/…），這個判斷收斂在 `x_status_is_terminal`，避免 closure gate 與 housekeeping 兩處各寫一份而漂移。
 - **PR 不能只用 branch name 當 key。** branch 推到 fork 時，同一個 base repository 上可能有多個 fork 都開著叫 `fix` 的 PR。因此查詢會同時比對 `headRefName` 與 `headRepositoryOwner`（owner 由 push remote 的 URL 推得）；仍然分不出來時回報 `X_PR_STATE=ambiguous` 並拒絕更新，而不是賭一個把別人的 PR body 蓋掉。查詢用 `gh --jq` 輸出 TSV，比對留在 shell 字串比較，既避免手寫 JSON parser，也讓這段邏輯可以被測試。
+### 生命週期與安裝 manifest
+
+`bin/skill-x` 把「選擇→部署→記錄」做成一條路徑。每個 checkout 有一個 installation id，存在 `.git/skill-x-install-id`（不是 git repo 時退回路徑雜湊），所以搬移或改名 checkout 之後仍是同一個安裝——manifest 裡的 `checkout_path` 與現在的執行位置不同時，`status`／`doctor` 會直接說「搬過家」，`install` 會把每一條連結重新指向。
+
+manifest 是刻意規則化的 JSON：頂層純量縮排兩格，陣列與物件寫在同一行，每個 entry 一行。這樣 `bin/lib/manifest.awk` 這種只會掃描字串的讀取器就夠用，不必為了讀回自己的狀態而引入 `jq` 依賴。
+
+`status` 會回報 `current`／`behind`／`ahead`／`diverged`／`unreachable`（外加獨立的 `dirty` 旗標），`--json` 的鍵順序是被測試釘住的契約。`doctor` 逐項判斷 `ok`／`missing`／`stale`／`foreign`，`--strict` 在有問題時以非零結束，適合放進自動化。
+
+upstream 由 `branch.<name>.remote` / `branch.<name>.merge` 推出，而不是 `@{upstream}`：remote-tracking ref 被 prune 掉時 `git rev-parse @{upstream}` 會一邊失敗一邊把字面字串印到 stdout，那正是安裝狀態會變成胡言亂語的來源。
+
+`uninstall` 只刪除 manifest 記錄、且現在仍指向預期目標的項目；其餘一律保留並列為 `preserved`。`--remove-checkout` 的髒工作區檢查放在最前面，拒絕時不會留下拆到一半的安裝。
 
 ### 更新檢查
 
-`bin/update-check` 依序檢查 snooze 與一小時節流狀態，再以 `git ls-remote origin HEAD` 比較本地 HEAD。只有遠端查詢成功才寫入 `last-check`；網路或 Git 失敗時保持靜默，不阻擋技能。輸出契約只有：
+`bin/update-check` 是技能執行時的便宜提示（權威狀態在 `bin/skill-x status`），可用 `SKILL_X_DISABLE_UPDATE_CHECK=1` 關閉。它依序檢查 snooze 與一小時節流狀態，再以 `git ls-remote origin HEAD` 比較本地 HEAD。只有遠端查詢成功才寫入 `last-check`；網路或 Git 失敗時保持靜默，不阻擋技能。輸出契約只有：
 
 - `UP_TO_DATE`
 - `UPGRADE_AVAILABLE <local_sha> <remote_sha>`
 - 無輸出（無法檢查）
 
-共用 header 指示 AI 發現更新時先詢問；同意後 `bin/apply-update.sh` 會 `git pull --ff-only`、重跑 `bin/build.sh`、再 `bin/sync-skills.sh`，拒絕則寫入七天後的 snooze timestamp。狀態位於 `~/.skill-x-starter-state/`。
+共用 header 指示 AI 發現更新時先詢問；同意後執行 `bin/skill-x update --yes`（fetch → 預覽 → fast-forward → 重新 build → 同步 → doctor），拒絕則寫入七天後的 snooze timestamp。節流與 snooze 狀態跟 manifest 放在同一個 per-installation 目錄，不同 checkout 之間互不干擾。
 
 ### 同步路徑
 
-`bin/sync-skills.sh` sources `targets.conf` to derive `$CANONICAL_DEST` and canonical consumer destinations from `CANONICAL_CONSUMERS`, then invokes each transform adapter's `sync` action. Transform adapters (e.g., `opencode-v1-commands`) handle OpenCode v1/v2 shim lifecycle: v1 installs symlinks to command shims, v2 removes managed shims while preserving user-owned command files.遇到同名非 symlink 內容只警告而不覆寫。
+`bin/skill-x sync` 從 `targets.conf` 取得 `$CANONICAL_DEST`、`CANONICAL_CONSUMERS` 與 `TRANSFORMED_TARGETS`，只同步 manifest 選到的 agent。Claude 是 `~/.claude/skills`，Codex 是 `~/.agents/skills`（主要路徑）與 `~/.codex/skills`（相容路徑，`SKILL_X_CODEX_COMPAT=0` 可關閉），OpenCode 是 `~/.config/opencode/skills`；transform adapter 負責 OpenCode v1 command shim 的生命週期。遇到同名非 symlink 內容只警告而不覆蓋。取消選擇某個 agent 時，manifest 差集會把先前建立的連結收回，使用者自有檔案不動。
 
 ### 容器部署
 
-`bin/cloud-bootstrap.sh` 接受 repo URL 與 ref，先 clone 到暫存目錄、checkout 指定 ref、**就地跑該 ref 的 `bin/build.sh`** 產出 artifact。新版 ref 會照 `CANONICAL_CONSUMERS` 把 canonical artifact 拷貝到各目標，再由 transform adapter 的 `bootstrap` action 決定 transform 產物；若 pinned ref 早於 target registry、沒有 `bin/targets/targets.conf`，則自動回退到歷史 `commands/` + `opencode-commands/` layout，保持舊 pin 可重建。認證由 image builder 的 SSH agent/secret 負責，避免 token 進入參數、log 或 image layer。部署後只有技能副本，沒有 repository 腳本，因此嵌入的本地更新檢查自然無法執行且必須靜默繼續。
+`bin/cloud-bootstrap.sh` 接受 repo URL 與 ref，先 clone 到暫存目錄、checkout 指定 ref、**就地跑該 ref 的 `bin/build.sh`** 產出 artifact。新版 ref 會照 `CANONICAL_CONSUMERS` 拷貝 canonical artifact，再由 transform adapter 的 `bootstrap` action 處理 transform 產物；若 pinned ref 早於 target registry，則回退到歷史 `commands/` + `opencode-commands/` layout。重複使用的 HOME 或 image layer 可能留有互動安裝建立的 symlink，pinned 複製前會先解開它，避免 `cp` 穿過連結寫回原始 checkout；從 v1 換到 v2 時也會移除帶 `skill-x-managed-command` 標記的 command 副本。認證由 image builder 的 SSH agent/secret 負責，避免 token 進入參數、log 或 image layer。部署後只有技能副本，沒有 repository 腳本，因此嵌入的本地更新檢查自然無法執行且必須靜默繼續。
 
 ## 目錄
 
@@ -122,37 +141,41 @@ adapter 的 action contract 固定為：`build <canonical-staging-dir> <artifact
 commands-src/                  手動編輯的作者版（build input）
 commands-src/_x-shared/        x-* 技能組共用的 xdh 腳本與 Markdown 樣板（各技能以 symlink 引用）
 _shared/update-check-header.md 共用更新與詢問指示（build input）
+.codex/skills/canonicalize-skill/ Codex 建置環境專用的 raw skill authoring tool（不分發）
+bin/skill-x                    生命週期入口（init/install/sync/status/doctor/update/uninstall）
+bin/lib/common.sh              agent 註冊表、狀態目錄、manifest 讀寫、git 輔助
+bin/lib/manifest.awk           manifest 讀取器（無外部相依）
 bin/build.sh                   產生 disposable artifact tree
 bin/targets/targets.conf       canonical 目的地與 target 註冊資料
 bin/targets/<adapter>.sh       各 transform adapter
-bin/update-check               節流遠端檢查
-bin/apply-update.sh            fast-forward 更新、build 與重新同步
+bin/update-check               節流遠端檢查（提示用，可停用）
+bin/apply-update.sh            相容包裝 → skill-x update --yes
 bin/snooze.sh                  延後提醒
-bin/sync-skills.sh             個人電腦 symlink
+bin/sync-skills.sh             相容包裝 → skill-x sync
 bin/opencode-version.sh        OpenCode v1/v2 判定與覆寫
 bin/cloud-bootstrap.sh         image 固定版本複製（含就地 build）
-bin/doctor.sh                  目標路徑診斷
+bin/doctor.sh                  相容包裝 → skill-x doctor
 commands/                      build 產生的 canonical artifact（.gitignore）
 opencode-commands/             build 產生的 OpenCode v1 command shim（.gitignore）
-.codex/skills/canonicalize-skill/ Codex 建置環境專用的 raw skill authoring tool（不分發）
-install.sh                     安裝入口（build 再 sync）
+install.sh                     相容包裝 → skill-x init
 tests/run.sh                   不需網路的整合測試
 tests/pr15-regression.sh       target contract 與 legacy pinned-ref regression tests
 ```
 
 ## 已知限制與優先驗證
 
-1. **Codex 路徑仍需實機驗證（中）**：目前同時覆蓋兩個候選全域路徑；先跑 doctor 與範例技能，再依實際載入來源簡化。
+1. **Codex 路徑仍需實機驗證（中）**：目前把 `~/.agents/skills` 當主要路徑、`~/.codex/skills` 當相容路徑同時覆蓋；先跑 `bin/skill-x doctor` 與範例技能，再依實際載入來源用 `SKILL_X_CODEX_COMPAT=0` 簡化。
 2. **Windows symlink（中）**：沒有 copy fallback；需 Developer Mode 或相應權限。
 3. **自然語言詢問（中）**：各工具互動能力不同，無法由 shell 測試完全保證。
 4. **無簽章驗證（低）**：信任 private origin；雲端應 pin commit，未驗證 commit signature。
-5. **狀態無鎖（低）**：同時呼叫可能競爭寫入 timestamp，但個人使用影響有限。
-6. **跨機與三工具實測待補**：優先測 pull、拒絕/snooze、重新啟動後技能發現與 `/`、`$` 叫用。
-7. **OpenCode 版本判定是啟發式（中）**：只讀 `opencode --version` 的主版號，偵測不到時回退 v1。同一台機器裝多個 OpenCode 版本或版本字串改格式時，須用 `SKILL_X_OPENCODE_VERSION` 明確指定。
-8. **`xdh pr` 只支援 GitHub `gh`（中）**：沒有 `gh` 時回報 `X_PR_PROVIDER=none`，由技能改成輸出手動建立 PR 的指示。要支援 GitLab 等平台需再加一個 provider 分支。head owner 由 push remote URL 推得，若 remote 未設定則退回只比對 branch name，此時多筆相符會回報 `ambiguous` 而不是任選一筆。
-9. **獨立 Reviewer 由 host 決定（中）**：`x-review` 要求另一個 Agent，但能否真的啟動獨立 Agent 取決於當下工具。無法啟動時規定回報 `BLOCKED_NO_INDEPENDENT_REVIEWER`，這條是靠指示而非機制保證的。
-10. **`.dev-hub` 沿用者的既有 `.gitignore`（低）**：`xdh` 只在缺少時附加三行，不會移除使用者自己寫的規則；若使用者手動刪掉這些行，Cycle 內容可能被誤 commit。
-11. **鎖是同機器內的（低）**：`x_lock` 用 `mkdir` 互斥，只保護同一台機器上的併發 agent。若 `.dev-hub` 放在多台機器共掛的網路檔案系統上，`mkdir` 的原子性不再保證。超過兩分鐘未釋放的鎖會被視為死行程留下的而清除。
+5. **狀態無鎖（低）**：同時呼叫可能競爭寫入 timestamp 或 manifest，但個人使用影響有限。
+6. **manifest 只記 symlink（低）**：cloud pinned 複製不寫 manifest，因此 `uninstall` 不負責清理 image 內的副本；image 的生命週期由重建 image 決定。
+7. **跨機與三工具實測待補**：優先測 pull、拒絕/snooze、重新啟動後技能發現與 `/`、`$` 叫用。
+8. **OpenCode 版本判定是啟發式（中）**：只讀 `opencode --version` 的主版號，偵測不到時回退 v1。同一台機器裝多個 OpenCode 版本或版本字串改格式時，須用 `SKILL_X_OPENCODE_VERSION` 明確指定。
+9. **`xdh pr` 只支援 GitHub `gh`（中）**：沒有 `gh` 時回報 `X_PR_PROVIDER=none`，由技能改成輸出手動建立 PR 的指示。要支援 GitLab 等平台需再加一個 provider 分支。head owner 由 push remote URL 推得，若 remote 未設定則退回只比對 branch name，此時多筆相符會回報 `ambiguous` 而不是任選一筆。
+10. **獨立 Reviewer 由 host 決定（中）**：`x-review` 要求另一個 Agent，但能否真的啟動獨立 Agent 取決於當下工具。無法啟動時規定回報 `BLOCKED_NO_INDEPENDENT_REVIEWER`，這條是靠指示而非機制保證的。
+11. **`.dev-hub` 沿用者的既有 `.gitignore`（低）**：`xdh` 只在缺少時附加三行，不會移除使用者自己寫的規則；若使用者手動刪掉這些行，Cycle 內容可能被誤 commit。
+12. **鎖是同機器內的（低）**：`x_lock` 用 `mkdir` 互斥，只保護同一台機器上的併發 agent。若 `.dev-hub` 放在多台機器共掛的網路檔案系統上，`mkdir` 的原子性不再保證。超過兩分鐘未釋放的鎖會被視為死行程留下的而清除。
 
 ## 未採用方案
 
@@ -163,8 +186,8 @@ tests/pr15-regression.sh       target contract 與 legacy pinned-ref regression 
 
 ## 維護規則
 
-- 只改 `commands-src/`、`_shared/`、`bin/`；隨後執行 `bin/build.sh`，不需 commit `commands/` 或 `opencode-commands/`（它們在 `.gitignore`）。
-- 新機器：clone 後執行 `./install.sh`。
-- 個人機器手動更新：`git pull --ff-only && bin/apply-update.sh`（套件自己會跑 build + sync）。
+- 只改 `commands-src/`、`_shared/`、`bin/` 等 build input；隨後執行 `bin/build.sh`，不需 commit `commands/` 或 `opencode-commands/`（它們在 `.gitignore`）。
+- 新機器：clone 後執行 `./install.sh`（或 `bin/skill-x init --agents ...`）。
+- 個人機器手動更新：`bin/skill-x update`（或非互動時 `bin/skill-x update --yes`）。
 - image 升級：更新 pinned ref 並重建，不在 runtime pull。
 - 每次修改腳本後執行 `make test`；測試使用暫存 HOME 與本機 bare Git remote，不會接觸使用者的真實技能目錄或遠端 repository。

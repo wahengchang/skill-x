@@ -21,8 +21,24 @@ MANAGED_MARKER="skill-x-managed-command"
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
+# shellcheck source=bin/lib/common.sh
+. "$REPO_ROOT/bin/lib/common.sh"
 OPENCODE_VERSION=$("$REPO_ROOT/bin/opencode-version.sh")
 OPENCODE_COMMANDS="$HOME/.config/opencode/commands"
+
+manifest_owns_symlink() {
+  local dest=$1 linked manifest agent kind path target
+  [[ -L "$dest" ]] || return 1
+  linked=$(readlink "$dest")
+  while IFS= read -r manifest; do
+    while IFS=$'\t' read -r agent kind path target; do
+      if [[ "$kind" == symlink && "$path" == "$dest" && "$target" == "$linked" ]]; then
+        return 0
+      fi
+    done < <(sx_manifest_entries "$manifest")
+  done < <(sx_all_manifests)
+  return 1
+}
 
 write_opencode_command() {
   local name=$1 description=$2 out=$3
@@ -45,15 +61,12 @@ EOF
 }
 
 remove_managed_shims() {
-  local artifact_dir=$1 dir=$2 mode=$3
+  local artifact_dir=$1 dir=$2 mode=$3 file linked_target
   [[ -d "$dir" ]] || return 0
   while IFS= read -r -d '' file; do
     if [[ -L "$file" ]]; then
+      manifest_owns_symlink "$file" || continue
       linked_target=$(readlink "$file")
-      if [[ "$linked_target" != "$artifact_dir"/* ]] &&
-         ! grep -q "$MANAGED_MARKER" "$file" 2>/dev/null; then
-        continue
-      fi
       if [[ "$mode" == keep-live && -f "$linked_target" ]]; then
         continue
       fi
@@ -112,7 +125,11 @@ case "$action" in
       name=$(basename "$command_file")
       link="$OPENCODE_COMMANDS/$name"
       if [[ -L "$link" ]]; then
-        ln -sfn "$command_file" "$link"
+        if manifest_owns_symlink "$link"; then
+          ln -sfn "$command_file" "$link"
+        else
+          echo "WARNING: preserving foreign command symlink: $link -> $(readlink "$link")" >&2
+        fi
       elif [[ -e "$link" ]]; then
         if grep -q "$MANAGED_MARKER" "$link" 2>/dev/null; then
           rm "$link"
@@ -141,7 +158,14 @@ case "$action" in
       name=$(basename "$command_file")
       dest="$OPENCODE_COMMANDS/$name"
       if [[ -e "$dest" || -L "$dest" ]]; then
-        if grep -q "$MANAGED_MARKER" "$dest" 2>/dev/null; then
+        if [[ -L "$dest" ]]; then
+          if manifest_owns_symlink "$dest"; then
+            rm "$dest"
+          else
+            echo "WARNING: skipping existing non-managed command: $dest" >&2
+            continue
+          fi
+        elif grep -q "$MANAGED_MARKER" "$dest" 2>/dev/null; then
           rm "$dest"
         else
           echo "WARNING: skipping existing non-managed command: $dest" >&2

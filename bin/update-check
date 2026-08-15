@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
+# Invocation-time update probe used by the header that bin/build.sh injects into
+# every skill. It must never block a skill: every failure path exits 0 quietly.
+#
+# `bin/skill-x status` is the authoritative check. This one is a cheap hint, is
+# throttled, and can be switched off with SKILL_X_DISABLE_UPDATE_CHECK=1.
 set -u
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd) || exit 0
-STATE_DIR=${SKILL_X_STATE_DIR:-"$HOME/.skill-x-starter-state"}
+[[ "${SKILL_X_DISABLE_UPDATE_CHECK:-0}" == 1 ]] && exit 0
+# shellcheck source=bin/lib/common.sh
+. "$ROOT/bin/lib/common.sh" 2>/dev/null || exit 0
+
 INTERVAL=${SKILL_X_CHECK_INTERVAL_SECONDS:-3600}
 now=$(date +%s)
 
 [[ -d "$ROOT/.git" ]] || exit 0
+STATE_DIR=$(sx_state_dir "$(sx_install_id "$ROOT")") || exit 0
 mkdir -p "$STATE_DIR" 2>/dev/null || exit 0
 
 read_timestamp() { [[ -f "$1" ]] && read -r value < "$1" && [[ "$value" =~ ^[0-9]+$ ]] && printf '%s' "$value"; }
@@ -26,4 +35,3 @@ if [[ "$local_sha" == "$remote_sha" ]]; then
 else
   echo "UPGRADE_AVAILABLE ${local_sha:0:12} ${remote_sha:0:12}"
 fi
-
