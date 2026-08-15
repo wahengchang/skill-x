@@ -13,6 +13,13 @@ TARGETS_CONF="$TARGETS_DIR/targets.conf"
 # shellcheck source=targets/targets.conf
 source "$TARGETS_CONF"
 
+# shellcheck source=lib/targets.sh
+source "$ROOT/bin/lib/targets.sh"
+
+# This must precede mktemp, mkdir, adapter execution, and every rm -rf below.
+skill_x_validate_artifact_paths
+skill_x_ensure_artifacts_ignored
+
 # Verify that every adapter script on disk is declared in
 # TRANSFORMED_TARGETS, and that every declared adapter exists on disk.
 # Catches drift between bin/targets/*.sh and the registry before any
