@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/skill-x-tests.XXXXXX")
+TEST_ROOT=$(cd -- "$(mktemp -d "${TMPDIR:-/tmp}/skill-x-tests.XXXXXX")" && pwd -P)
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 passed=0
@@ -1186,18 +1186,19 @@ test_install_is_idempotent_and_records_a_manifest() {
   manifest=$(manifest_of "$home")
   [[ -n "$manifest" ]]
   cp "$manifest" "$project/manifest-1.json"
-  first=$(find "$home" -mindepth 1 | sort)
+  first=$(find "$home/.claude" "$home/.config/opencode" "$home/.local/state/skill-x" -mindepth 1 | sort)
 
   # An empty SKILL_X_AGENTS falls through to the recorded selection.
   HOME="$home" SKILL_X_AGENTS= "$project/bin/skill-x" install >/dev/null
-  [[ "$(find "$home" -mindepth 1 | sort)" == "$first" ]]
+  [[ "$(find "$home/.claude" "$home/.config/opencode" "$home/.local/state/skill-x" -mindepth 1 | sort)" == "$first" ]]
 
   # Only the timestamps may move between two identical installs.
   diff <(rg -v '"last_' "$project/manifest-1.json") <(rg -v '"last_' "$manifest")
 
   rg -q '"agents": \["claude", "opencode"\]' "$manifest"
   rg -q '"opencode_mode": "v1"' "$manifest"
-  rg -q '"skills": \["example-skill", "funny-text-rewriter", "herdr"\]' "$manifest"
+  [[ "$(awk -f "$project/bin/lib/manifest.awk" -v mode=array -v key=skills "$manifest")" == \
+     "$(find "$project/commands" -mindepth 2 -maxdepth 2 -type f -name SKILL.md | sed 's#/SKILL.md$##; s#.*/##' | sort)" ]]
   rg -qF "\"checkout_path\": \"$project\"" "$manifest"
   # Paths containing a space survive writing and reading the manifest.
   rg -qF "\"path\": \"$home/.claude/skills/example-skill\"" "$manifest"

@@ -222,6 +222,12 @@ sync_agents() {
     while IFS= read -r -d '' skill; do
       name=$(basename "$skill")
       link="$commands_dir/$name"
+      # A pinned/image install may have left a managed regular-file shim in
+      # this HOME. Convert only files carrying our marker; user-owned command
+      # files still go through link_or_warn and are preserved.
+      if [[ ! -L "$link" && -f "$link" ]] && grep -q "$SKILL_X_MANAGED_MARKER" "$link" 2>/dev/null; then
+        rm -f "$link"
+      fi
       link_or_warn "$skill" "$link" || continue
       printf '%s\t%s\t%s\t%s\n' opencode symlink "$link" "$skill" >> "$entries_out"
     done < <(find "$COMMAND_SOURCE" -mindepth 1 -maxdepth 1 -type f -name '*.md' -print0 | sort -z)
