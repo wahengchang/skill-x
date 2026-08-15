@@ -4,6 +4,9 @@
 - Base: {{BASE}}
 - Implementer Agent: {{IMPLEMENTER}}
 - Reviewer Agent: {{REVIEWER}}
+- Reviewer Type: {{REVIEWER_TYPE}}
+- Reviewer Model: {{REVIEWER_MODEL}}
+- Review Mode: {{REVIEW_MODE}}
 - Independent: {{INDEPENDENT}}
 - Target fingerprint: {{FINGERPRINT}}
 - Reviewed tree: {{TREE}}

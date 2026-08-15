@@ -265,6 +265,7 @@ x_item_new() {
 # artifacts/debug, or anywhere with --dir for standalone runs).
 x_artifact_new() {
   local kind="" cycle="" dir="" target="—" base="—" implementer="—" reviewer="—"
+  local reviewer_type="—" reviewer_model="—" review_mode="—"
   local independent="unknown" fingerprint="—" tree="—"
   while (( $# )); do
     case $1 in
@@ -275,6 +276,9 @@ x_artifact_new() {
       --base) base=$2; shift 2 ;;
       --implementer) implementer=$2; shift 2 ;;
       --reviewer) reviewer=$2; shift 2 ;;
+      --reviewer-type) reviewer_type=$2; shift 2 ;;
+      --reviewer-model) reviewer_model=$2; shift 2 ;;
+      --review-mode) review_mode=$2; shift 2 ;;
       --independent) independent=$2; shift 2 ;;
       --fingerprint) fingerprint=$2; shift 2 ;;
       --tree) tree=$2; shift 2 ;;
@@ -305,7 +309,9 @@ x_artifact_new() {
   if [[ $kind == RV ]]; then
     x_render_template "$template" \
       ID "$id" TARGET "$target" BASE "$base" \
-      IMPLEMENTER "$implementer" REVIEWER "$reviewer" INDEPENDENT "$independent" \
+      IMPLEMENTER "$implementer" REVIEWER "$reviewer" \
+      REVIEWER_TYPE "$reviewer_type" REVIEWER_MODEL "$reviewer_model" REVIEW_MODE "$review_mode" \
+      INDEPENDENT "$independent" \
       FINGERPRINT "$fingerprint" TREE "$tree" CREATED "$(x_now_iso)" \
       | x_atomic_write "$file"
   else

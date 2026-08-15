@@ -525,6 +525,75 @@ test_xdh_fingerprint_tracks_content_not_time() {
   rg -q '^X_REVIEW_FRESHNESS=STALE$' "$project/verify.out"
 }
 
+test_x_review_documents_cross_model_dispatch() {
+  local project="$TEST_ROOT/x-review-skill"
+  copy_project "$project"
+  "$project/bin/build.sh" >/dev/null
+  local skill="$project/commands/x-review/SKILL.md"
+
+  # Two independent reviewer paths, CLI preferred over the host subagent, and
+  # the existing blocked verdict is preserved when neither is available.
+  rg -q 'Codex CLI' "$skill"
+  rg -q 'host subagent' "$skill"
+  rg -q 'BLOCKED_NO_INDEPENDENT_REVIEWER' "$skill"
+  rg -q 'codex-cli' "$skill"
+  rg -q 'host-subagent' "$skill"
+
+  # Default branch-diff mode uses the review-oriented command; focused mode uses
+  # general execution with an explicit read-only sandbox.
+  rg -q 'codex review' "$skill"
+  rg -q 'codex exec' "$skill"
+  rg -q -- '--sandbox read-only' "$skill"
+  rg -q -- '--uncommitted' "$skill"
+
+  # No invocation shape can grant the reviewer write authority.
+  ! rg -q -- '--sandbox workspace-write' "$skill"
+  ! rg -q -- '--sandbox danger-full-access' "$skill"
+  ! rg -q -- '--dangerously-bypass-approvals-and-sandbox' "$skill"
+  ! rg -q -- '--add-dir' "$skill"
+
+  # Bounded timeout and a secret-free auth preflight are documented.
+  rg -q 'timeout' "$skill"
+  rg -q 'gtimeout' "$skill"
+  rg -q 'OPENAI_API_KEY' "$skill"
+  rg -q 'auth.json' "$skill"
+
+  # Provenance flags and finding normalization are wired into the artifact.
+  rg -q -- '--reviewer-type' "$skill"
+  rg -q -- '--reviewer-model' "$skill"
+  rg -q -- '--review-mode' "$skill"
+  rg -q 'file:line' "$skill"
+  rg -q 'recompute the fingerprint' "$skill"
+}
+
+test_x_review_artifact_records_reviewer_provenance() {
+  local project="$TEST_ROOT/xdh-rv" repo="$TEST_ROOT/xdh-rv-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-review/scripts/xdh"
+
+  local out file
+  out=$(cd "$repo" && "$xdh" artifact new --kind RV \
+    --target WG-001 --base main \
+    --implementer impl --reviewer rev \
+    --reviewer-type codex-cli --reviewer-model gpt-5 --review-mode branch-diff \
+    --independent yes --fingerprint fp --tree tree)
+  file=$(rg -N --replace '$1' '^X_ARTIFACT_FILE=(.*)$' <<<"$out")
+
+  rg -q '^- Reviewer Type: codex-cli$' "$file"
+  rg -q '^- Reviewer Model: gpt-5$' "$file"
+  rg -q '^- Review Mode: branch-diff$' "$file"
+  rg -q '^- Reviewer Agent: rev$' "$file"
+  rg -q '^- Independent: yes$' "$file"
+
+  # Omitted provenance falls back to the em-dash placeholder, never empty.
+  local out2 file2
+  out2=$(cd "$repo" && "$xdh" artifact new --kind RV --target WG-002)
+  file2=$(rg -N --replace '$1' '^X_ARTIFACT_FILE=(.*)$' <<<"$out2")
+  rg -q '^- Reviewer Type: —$' "$file2"
+  rg -q '^- Reviewer Model: —$' "$file2"
+  rg -q '^- Review Mode: —$' "$file2"
+}
+
 test_xdh_housekeeping_refuses_unsafe_removals() {
   local project="$TEST_ROOT/xdh-clean" repo="$TEST_ROOT/xdh-clean-repo"
   make_xdh_fixture "$project" "$repo"
@@ -1584,6 +1653,8 @@ run_test 'build materializes shared x-skill assets' test_build_materializes_shar
 run_test 'xdh creates cycles and work items idempotently' test_xdh_creates_cycles_and_items_idempotently
 run_test 'xdh binds one work group to one branch and worktree' test_xdh_work_group_binds_branch_and_worktree
 run_test 'xdh fingerprints content, not time' test_xdh_fingerprint_tracks_content_not_time
+run_test 'x-review documents cross-model dispatch' test_x_review_documents_cross_model_dispatch
+run_test 'x-review artifact records reviewer provenance' test_x_review_artifact_records_reviewer_provenance
 run_test 'xdh housekeeping refuses unsafe removals' test_xdh_housekeeping_refuses_unsafe_removals
 run_test 'xdh closes a cycle into a tracked log' test_xdh_cycle_closes_into_a_tracked_log
 run_test 'xdh concurrent cycle creation yields one cycle' test_xdh_concurrent_cycle_creation_yields_one_cycle

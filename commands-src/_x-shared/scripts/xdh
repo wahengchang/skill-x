@@ -62,7 +62,8 @@ Work
   xdh wg new --slug S [--title T] [--items "IS-001"] [--owner O]
              [--base B] [--from REF] [--cycle C]
   xdh artifact new --kind RV|DBG [--target T] [--base B] [--implementer A]
-             [--reviewer A] [--independent yes|no] [--fingerprint F] [--tree T]
+             [--reviewer A] [--reviewer-type T] [--reviewer-model M] [--review-mode M]
+             [--independent yes|no] [--fingerprint F] [--tree T]
              [--cycle C] [--dir D]
   xdh runtime new --skill S [--slug S]
 

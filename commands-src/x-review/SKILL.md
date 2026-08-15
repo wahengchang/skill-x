@@ -40,6 +40,124 @@ uncommitted — into a throwaway Git index and reports the resulting tree. That
 tree is the review target: an approval is bound to content, not to a timestamp,
 and `xdh fingerprint verify --expect <fp>` answers `FRESH` or `STALE` for free.
 
+## Reviewer selection and dispatch
+
+Two independent reviewer paths exist, in strict preference order. Both are
+fresh, read-only, and never the implementer. The orchestrator (this skill)
+obtains the reviewer, feeds it the real repository and the full diff, and folds
+the result into the RV artifact below. It never pastes the whole codebase into a
+prompt, and it never lets a reviewer edit the content under review.
+
+### Path 1 — preferred: a fresh read-only Codex CLI child
+
+A new `codex` process reviews the repository itself. It is cross-model by
+construction, and its session has no memory of writing the code.
+
+The commands below use shared variables the orchestrator resolves first:
+`X_MAIN_ROOT` is the repository root, `X_BASE_BRANCH` the base branch from
+step 2, `X_REVIEW_TIMEOUT_SECONDS` a bounded timeout in seconds, and
+`X_REVIEW_PROMPT`, `X_FINDINGS`, `X_DIAGNOSTICS` temp files for the review
+prompt, findings, and diagnostics respectively.
+
+**Preflight.** Every check must pass, or the CLI reviewer is unavailable. The
+checks print no secrets.
+
+```bash
+command -v codex >/dev/null 2>&1 || { echo 'no codex executable' >&2; }
+
+# A usable authentication signal, reported as yes/no only. Supports both the
+# environment-key path and Codex's own auth file (under $CODEX_HOME, else ~/.codex).
+auth_ok=no
+[[ -n ${OPENAI_API_KEY:-} ]] && auth_ok=yes
+auth_file="${CODEX_HOME:-$HOME/.codex}/auth.json"
+if [[ $auth_ok == no && -f $auth_file ]]; then
+  python3 - "$auth_file" <<'PY' && auth_ok=yes
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    ok = bool(d.get("OPENAI_API_KEY")
+              or (d.get("tokens") or {}).get("access_token")
+              or (d.get("tokens") or {}).get("id_token"))
+    sys.exit(0 if ok else 1)
+except Exception:
+    sys.exit(1)
+PY
+fi
+[[ $auth_ok == yes ]] || { echo 'no codex auth signal' >&2; }
+
+# A bounded timeout is a hard requirement: prefer GNU timeout, then coreutils'
+# gtimeout (macOS). Without either, the CLI path is unavailable.
+X_TIMEOUT=
+for t in timeout gtimeout; do
+  command -v "$t" >/dev/null 2>&1 && { X_TIMEOUT=$t; break; }
+done
+[[ -n $X_TIMEOUT ]] || { echo 'no timeout utility' >&2; }
+```
+
+**Default mode — branch diff (review-oriented).** Fetch the base first (step 2
+below), then run inside the repository root and keep findings separate from
+diagnostics:
+
+```bash
+cd "$X_MAIN_ROOT"
+"$X_TIMEOUT" "$X_REVIEW_TIMEOUT_SECONDS" codex review --base "$X_BASE_BRANCH" - \
+  < "$X_REVIEW_PROMPT" > "$X_FINDINGS" 2> "$X_DIAGNOSTICS"
+X_STATUS=$?
+```
+
+`codex review --base` reviews only *committed* changes against the base. When
+the review target includes uncommitted changes — the fingerprint always
+snapshots them, and step 2's `git diff "$DIFF_BASE"` shows them — pass
+`--uncommitted` so the CLI reviewer sees the same content the orchestrator does.
+
+**Focused mode — adversarial, security, design, or plan review (general
+execution, read-only sandbox).** Same shape, but `codex exec` with an explicit
+read-only sandbox and a non-persisting session:
+
+```bash
+"$X_TIMEOUT" "$X_REVIEW_TIMEOUT_SECONDS" codex exec --sandbox read-only --ephemeral \
+  -C "$X_MAIN_ROOT" - < "$X_REVIEW_PROMPT" > "$X_FINDINGS" 2> "$X_DIAGNOSTICS"
+X_STATUS=$?
+```
+
+The review prompt is the same in both modes: review the diff against the base,
+cover every category in step 3 below, write findings as `severity`, `file:line`,
+a concrete failure scenario, evidence, and a recommended resolution, and never
+edit any file. `codex review` is read-only by design — the subcommand exposes no
+sandbox or approval-bypass flag, so nothing in the invocation can grant write
+authority. On the `exec` path the only permitted sandbox value is `read-only`.
+
+**Failure means fall back, not retry.** Any of these marks the CLI reviewer
+unavailable: `codex` missing, no auth signal, no timeout utility, a non-zero
+exit (rejected/unsupported invocation or runtime auth failure), a timeout
+(`X_STATUS` 124), or empty stdout (`! -s "$X_FINDINGS"`). Do not retry the CLI;
+move to Path 2.
+
+### Path 2 — fallback: a fresh independent host subagent
+
+Dispatch one fresh, independent subagent through the host runtime running this
+skill, in a session with no memory of implementation. It reviews the same real
+repository and full diff, read-only, and reports in the same findings format.
+
+If the host cannot start a fresh independent subagent either, do not silently
+downgrade to self-review: record `BLOCKED_NO_INDEPENDENT_REVIEWER` and stop.
+
+### Normalizing findings and recording provenance
+
+Both paths produce findings the orchestrator normalizes into the RV structure
+(step 4): severity, `file:line`, concrete failure scenario, evidence, and a
+recommended resolution. Record reviewer provenance on the RV artifact —
+reviewer type (`codex-cli` or `host-subagent`), model, and review mode — so the
+report identifies who reviewed how. A missing severity token such as `[P1]`
+never implies approval: apply the existing verdict contract to every verified
+actionable finding.
+
+### Re-review
+
+After the implementer fixes findings, recompute the fingerprint. The prior
+approval is stale, and an independent review runs again through the same
+CLI-first dispatch — never a self-review.
+
 ## Required workflow
 
 ### 1. Record identity and target
@@ -47,13 +165,16 @@ and `xdh fingerprint verify --expect <fp>` answers `FRESH` or `STALE` for free.
 ```bash
 "$XDH" fingerprint --base <base>
 "$XDH" artifact new --kind RV --target "<WG-XXX / branch>" --base <base> \
-  --implementer "<agent-id>" --reviewer "<agent-id>" --independent yes \
+  --implementer "<agent-id>" --reviewer "<reviewer-id>" \
+  --reviewer-type "<codex-cli|host-subagent>" --reviewer-model "<model>" \
+  --review-mode "<branch-diff|focused>" --independent yes \
   --fingerprint "<X_FINGERPRINT>" --tree "<X_TREE>"
 ```
 
-If implementer and reviewer identity are the same, stop here with
-`BLOCKED_NO_INDEPENDENT_REVIEWER`. Standalone runs pass `--dir` from
-`xdh runtime new --skill x-review`.
+The reviewer identity, type, model, and mode come from the dispatch step above.
+If implementer and reviewer identity are the same, or no reviewer path is
+available, stop here with `BLOCKED_NO_INDEPENDENT_REVIEWER`. Standalone runs
+pass `--dir` from `xdh runtime new --skill x-review`.
 
 ### 2. Read the whole diff, then read outside it
 
