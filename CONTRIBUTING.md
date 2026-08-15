@@ -42,7 +42,7 @@ mkdir -p commands-src/<skill-name>/scripts
 # 4. 重新產生部署版本
 bin/build.sh
 
-# 5. 跑一次整合測試，確認沒把 build/sync 腳本弄壞
+# 5. 內容型/低風險修改先跑快速驗證
 make test
 
 # 6. 本機同步一次，實際用用看（可選但建議）
@@ -54,6 +54,8 @@ git add commands-src/<skill-name>
 git commit -m "add <skill-name> skill"
 git push
 ```
+
+如果這次修改碰到 shell/runtime/test infrastructure、生命週期、Git update、sync/bootstrap、target adapter、`xdh` 或其他 executable support code，步驟 5 必須改跑 `make test-full`；完整判斷規則見第 5 節。
 
 其他機器要跟上：`bin/skill-x update`（會先預覽再詢問），或什麼都不做，等下次呼叫任一技能時它自己會問你要不要更新。
 
@@ -93,8 +95,9 @@ bin/build.sh
 
 ### 修改既有技能 / 修改共用的更新檢查邏輯
 
-- 改某顆技能：直接改 `commands-src/<name>/SKILL.md`，一樣跑 `bin/build.sh` + `make test` + commit 來源。
-- 改 `_shared/update-check-header.md`（會影響**所有**技能）：改完必須跑一次 `bin/build.sh` 讓全部技能重新套用；不需要也不應該把 `commands/` 或 `opencode-commands/` 裡的變動 commit 進來——它們是 disposable artifact。
+- 改某顆技能的 `SKILL.md` 內容：直接改 `commands-src/<name>/SKILL.md`，一樣跑 `bin/build.sh` + `make test` + commit 來源。
+- 改 `_shared/update-check-header.md`（會影響**所有**技能）：改完必須跑一次 `bin/build.sh` 讓全部技能重新套用，再跑 `make test`；不需要也不應該把 `commands/` 或 `opencode-commands/` 裡的變動 commit 進來——它們是 disposable artifact。
+- 改技能附帶的 executable script（例如 `commands-src/_x-shared/scripts/xdh`）：這不是 content-only 變更，必須跑 `make test-full`。
 
 ---
 
@@ -120,15 +123,28 @@ bin/build.sh
 - **commit 了 `commands/` 或 `opencode-commands/`**：它們是 `.gitignore` 的 disposable artifact；commit 它們只會讓之後的 `git status` 一直叫，或者在 build 之後產生無意義的 conflict。`git rm -r --cached` 清掉就好。
 - **改了 `commands-src/`，卻在本機直接跑 `bin/skill-x sync` 而沒先 build**：會同步舊 artifact；改用 `bin/skill-x install`，或先執行 `bin/build.sh`。
 - **`name:` 跟資料夾名不一致**：目前無自動檢查，純靠自律；建議寫的當下就對照一次。
-- **跑 `make test` 前沒裝 `ripgrep`**：測試腳本用 `rg` 做輸出比對，`brew install ripgrep` / `apt install ripgrep` 先裝好。
+- **跑測試前沒裝 `ripgrep`**：測試腳本用 `rg` 做輸出比對，`brew install ripgrep` / `apt install ripgrep` 先裝好。
 
 ---
 
-## 5. 提交前檢查清單
+## 5. 測試層級
+
+測試分成兩條明確路徑，詳細命令與 timeout 設定見 `tests/README.md`：
+
+- `make test`（等同 `make test-fast`）：日常快速路徑。它只建立一次 source-only fixture，跑一次 build/install，再驗證 canonical artifact、OpenCode shim、shared support materialization、基本 sync/idempotency、doctor 與 generated artifact ignore 規則。適合只有 `SKILL.md` 內容、說明文件、或其他低風險修改。
+- `make test-full`：完整回歸路徑。它保留並執行原本的 61 個測試：`tests/run.sh` 51 個、`tests/pr10-safety-regression.sh` 3 個、`tests/pr15-regression.sh` 7 個。任何 `bin/`、`tests/`、`Makefile`、生命週期、Git update、sync/bootstrap、target adapter、`xdh`、其他 executable support code、或 release-quality/high-risk 變更都必須跑這條。
+
+兩條路徑都經過 `tests/run-suite.sh`，會印出 suite elapsed time，並用 bounded timeout 防止 deadlock、worktree lock 或 stalled subprocess 無限掛住。`make test-timeout` 會用受控的 sleep fixture 驗證 timeout 確實回傳 non-zero 且輸出 `TIMEOUT`。
+
+---
+
+## 6. 提交前檢查清單
 
 - [ ] `commands-src/<name>/SKILL.md` 的 `name:` 跟資料夾名一致
 - [ ] 命名符合第 3 節規則（kebab-case、具體、必要時共用字首）
 - [ ] `description:` 講清楚做什麼 + 何時觸發
 - [ ] 跑過 `bin/build.sh`
 - [ ] 跑過 `make test`，全部 PASS
+- [ ] 若本次變更屬第 5 節的 full-suite 類型，跑過 `make test-full`，全部 PASS
+- [ ] 若修改 timeout/test runner，另外跑過 `make test-timeout`
 - [ ] `git status` 沒有列出 `commands/` 或 `opencode-commands/` 的變動（它們是 gitignored artifact）
