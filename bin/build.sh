@@ -76,11 +76,15 @@ while IFS= read -r -d '' skill; do
 
   skill_dir=$(dirname "$skill")
   out_dir=$(dirname "$out")
+  # -L follows symlinked support directories, so a set of skills can share one
+  # source copy of its scripts/templates (commands-src/_x-shared/) while every
+  # deployed skill still ships a self-contained, real copy — a skill is synced
+  # to ~/.claude/skills/<name> on its own and cannot reach a sibling.
   while IFS= read -r -d '' support; do
     support_rel=${support#"$skill_dir/"}
     mkdir -p "$out_dir/$(dirname "$support_rel")"
-    cp -a "$support" "$out_dir/$support_rel"
-  done < <(find "$skill_dir" -type f ! -name SKILL.md -print0)
+    cp -aL "$support" "$out_dir/$support_rel"
+  done < <(find -L "$skill_dir" -type f ! -name SKILL.md -print0)
 done < <(find "$SRC" -mindepth 2 -maxdepth 2 -type f -name SKILL.md -print0 | sort -z)
 
 (( found )) || { echo "No skills found in $SRC" >&2; exit 1; }

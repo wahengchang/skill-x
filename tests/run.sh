@@ -389,6 +389,543 @@ test_cloud_bootstrap_installs_command_shims() {
   [[ -f "$home_v2/.config/opencode/skills/example-skill/SKILL.md" ]]
 }
 
+X_SKILLS=(x-discovery x-plan-eng x-review x-debug x-ship x-housekeeping)
+
+test_build_materializes_shared_skill_assets() {
+  local project="$TEST_ROOT/x-assets"
+  copy_project "$project"
+  "$project/bin/build.sh" >/dev/null
+
+  local skill
+  for skill in "${X_SKILLS[@]}"; do
+    # The source tree shares one copy through a symlink; the deployment must
+    # contain real files, because each skill is synced to the tools on its own.
+    [[ -L "$project/commands-src/$skill/scripts" ]]
+    [[ ! -L "$project/commands/$skill/scripts" ]]
+    [[ -x "$project/commands/$skill/scripts/xdh" ]]
+    [[ -f "$project/commands/$skill/scripts/lib/common.sh" ]]
+    [[ -f "$project/commands/$skill/templates/issue.md" ]]
+    cmp "$project/commands-src/_x-shared/scripts/xdh" "$project/commands/$skill/scripts/xdh"
+  done
+
+  # The shared source directory is not itself a skill.
+  [[ ! -e "$project/commands/_x-shared" ]]
+  [[ ! -e "$project/opencode-commands/_x-shared.md" ]]
+}
+
+# Build the project, then hand back a throwaway Git repository plus the path to
+# the *deployed* xdh — the exact file a synced tool would execute.
+make_xdh_fixture() {
+  local project=$1 repo=$2
+  copy_project "$project"
+  "$project/bin/build.sh" >/dev/null
+  mkdir -p "$repo"
+  git init -q -b main "$repo"
+  git -C "$repo" config user.email test@example.invalid
+  git -C "$repo" config user.name 'Test Runner'
+  echo seed > "$repo/seed.txt"
+  git -C "$repo" add -A
+  git -C "$repo" commit -qm initial
+}
+
+test_xdh_creates_cycles_and_items_idempotently() {
+  local project="$TEST_ROOT/xdh-cycle" repo="$TEST_ROOT/xdh-cycle-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-discovery/scripts/xdh"
+
+  local first second
+  first=$(cd "$repo" && "$xdh" cycle new --slug 'Login Flow!!' --title 'Login flow')
+  rg -q '^X_CYCLE=cycle-[0-9]{8}-[0-9]{4}-login-flow$' <<<"$first"
+  rg -q '^X_CYCLE_REUSED=no$' <<<"$first"
+
+  # A second discovery pass over the same scope updates the Cycle in place.
+  second=$(cd "$repo" && "$xdh" cycle new --slug login-flow)
+  rg -q '^X_CYCLE_REUSED=yes$' <<<"$second"
+  [[ $(rg '^X_CYCLE=' <<<"$first") == "$(rg '^X_CYCLE=' <<<"$second")" ]]
+  [[ $(find "$repo/.dev-hub/active" -mindepth 1 -maxdepth 1 -type d | wc -l) -eq 1 ]]
+
+  # Runtime state is ignored; the cycle log directory is not.
+  rg -qx '\.dev-hub/active/' "$repo/.gitignore"
+  rg -qx '\.dev-hub/runtime/' "$repo/.gitignore"
+  ! rg -q 'logs' "$repo/.gitignore"
+
+  # IDs increment across kinds and never collide; re-planning reuses the file.
+  (cd "$repo" && "$xdh" item new --type issue --slug session-timeout >/dev/null)
+  (cd "$repo" && "$xdh" item new --type spike --slug token-store >/dev/null)
+  local again
+  again=$(cd "$repo" && "$xdh" item new --type issue --slug session-timeout --title Ignored)
+  rg -q '^X_ITEM_ID=IS-001$' <<<"$again"
+  rg -q '^X_ITEM_REUSED=yes$' <<<"$again"
+  rg -q '^X_NEXT_ID=IS-002$' <<<"$(cd "$repo" && "$xdh" id next --kind IS)"
+  rg -q '^X_NEXT_ID=SP-002$' <<<"$(cd "$repo" && "$xdh" id next --kind SP)"
+}
+
+test_xdh_work_group_binds_branch_and_worktree() {
+  local project="$TEST_ROOT/xdh-wg" repo="$TEST_ROOT/xdh-wg-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-plan-eng/scripts/xdh"
+
+  (cd "$repo" && "$xdh" cycle new --slug auth >/dev/null)
+  local first second worktree
+  first=$(cd "$repo" && "$xdh" wg new --slug login --items IS-001)
+  rg -q '^X_WG_ID=WG-001$' <<<"$first"
+  rg -q '^X_WG_BRANCH=x/[0-9]{8}-[0-9]{4}-wg-001-login$' <<<"$first"
+  worktree=$(rg -N --replace '$1' '^X_WG_WORKTREE=(.*)$' <<<"$first")
+  [[ -d $worktree ]]
+
+  second=$(cd "$repo" && "$xdh" wg new --slug login)
+  rg -q '^X_WG_REUSED=yes$' <<<"$second"
+  rg -q '^X_WORKTREE_CREATED=no$' <<<"$second"
+  [[ $(git -C "$repo" worktree list | wc -l) -eq 2 ]]
+  [[ $(git -C "$repo" branch --list 'x/*' | wc -l) -eq 1 ]]
+
+  # A skill invoked inside the linked worktree must still find the shared hub.
+  local from_worktree
+  from_worktree=$(cd "$worktree" && "$xdh" paths)
+  rg -qx "X_MAIN_ROOT=$repo" <<<"$from_worktree"
+  rg -qx "X_DEV_HUB=$repo/.dev-hub" <<<"$from_worktree"
+  rg -qx "X_CURRENT_ROOT=$worktree" <<<"$from_worktree"
+}
+
+test_xdh_fingerprint_tracks_content_not_time() {
+  local project="$TEST_ROOT/xdh-fp" repo="$TEST_ROOT/xdh-fp-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-review/scripts/xdh"
+
+  git -C "$repo" checkout -q -b feature
+  echo change > "$repo/seed.txt"
+  local fp
+  fp=$(cd "$repo" && "$xdh" fingerprint --base main | rg -N --replace '$1' '^X_FINGERPRINT=(.*)$')
+  [[ -n $fp ]]
+
+  # Uncommitted work counts as content: committing it must not move the target.
+  git -C "$repo" add -A
+  git -C "$repo" commit -qm 'feat: change'
+  rg -q '^X_REVIEW_FRESHNESS=FRESH$' \
+    <<<"$(cd "$repo" && "$xdh" fingerprint verify --expect "$fp" --base main)"
+
+  # Any later edit invalidates the approval.
+  echo more >> "$repo/seed.txt"
+  if (cd "$repo" && "$xdh" fingerprint verify --expect "$fp" --base main >"$project/verify.out" 2>&1); then
+    return 1
+  fi
+  rg -q '^X_REVIEW_FRESHNESS=STALE$' "$project/verify.out"
+}
+
+test_xdh_housekeeping_refuses_unsafe_removals() {
+  local project="$TEST_ROOT/xdh-clean" repo="$TEST_ROOT/xdh-clean-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-housekeeping/scripts/xdh"
+
+  (cd "$repo" && "$xdh" cycle new --slug cleanup >/dev/null)
+  local worktree
+  worktree=$(cd "$repo" && "$xdh" wg new --slug widget |
+             rg -N --replace '$1' '^X_WG_WORKTREE=(.*)$')
+
+  # 1. Uncommitted work is never destroyed.
+  echo scratch > "$worktree/scratch.txt"
+  rg -q '^ITEM\tDIRTY\tworktree\t' <<<"$(cd "$repo" && "$xdh" clean scan)"
+  (cd "$repo" && "$xdh" clean apply >/dev/null)
+  [[ -d $worktree ]]
+  [[ -f $worktree/scratch.txt ]]
+
+  # 2. Committed but unintegrated work is never destroyed either.
+  git -C "$worktree" add -A
+  git -C "$worktree" commit -qm 'feat: widget'
+  rg -q '^ITEM\tUNMERGED\tworktree\t' <<<"$(cd "$repo" && "$xdh" clean scan)"
+  (cd "$repo" && "$xdh" clean apply >/dev/null)
+  [[ -d $worktree ]]
+
+  # 3. Once merged, the worktree and then the branch become removable.
+  git -C "$repo" merge -q --no-ff -m 'merge widget' \
+    "$(git -C "$worktree" rev-parse --abbrev-ref HEAD)"
+  rg -q '^ITEM\tSAFE\tworktree\t' <<<"$(cd "$repo" && "$xdh" clean scan)"
+  (cd "$repo" && "$xdh" clean apply >/dev/null)
+  [[ ! -d $worktree ]]
+  (cd "$repo" && "$xdh" clean apply >/dev/null)
+  [[ -z $(git -C "$repo" branch --list 'x/*') ]]
+}
+
+test_xdh_cycle_closes_into_a_tracked_log() {
+  local project="$TEST_ROOT/xdh-close" repo="$TEST_ROOT/xdh-close-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-housekeeping/scripts/xdh"
+
+  local cycle
+  cycle=$(cd "$repo" && "$xdh" cycle new --slug release |
+          rg -N --replace '$1' '^X_CYCLE=(.*)$')
+  (cd "$repo" && "$xdh" item new --type issue --slug alpha >/dev/null)
+  (cd "$repo" && "$xdh" item new --type issue --slug beta >/dev/null)
+
+  # An unfinished item blocks closure and the Cycle survives.
+  if (cd "$repo" && "$xdh" cycle close --cycle "$cycle" --summary x >"$project/close.out" 2>&1); then
+    return 1
+  fi
+  rg -q '^BLOCKER work-item IS-001-alpha\.md status=draft$' "$project/close.out"
+  [[ -d "$repo/.dev-hub/active/$cycle" ]]
+
+  local f
+  for f in "$repo/.dev-hub/active/$cycle"/work-items/*.md; do
+    (cd "$repo" && "$xdh" field set "$f" Status done >/dev/null)
+  done
+  (cd "$repo" && "$xdh" cycle close --cycle "$cycle" \
+     --summary 'Shipped alpha and beta.' --decisions 'Kept the old store.' >/dev/null)
+
+  [[ ! -d "$repo/.dev-hub/active/$cycle" ]]
+  rg -q '^\*\*Summary:\*\* Shipped alpha and beta\.$' "$repo/.dev-hub/logs/$cycle.md"
+  rg -q '^- Work items: IS-001-alpha, IS-002-beta$' "$repo/.dev-hub/logs/$cycle.md"
+
+  # The log is the part that must survive in Git.
+  git -C "$repo" add -A
+  rg -qx "\.dev-hub/logs/$cycle.md" <<<"$(git -C "$repo" diff --cached --name-only)"
+}
+
+test_xdh_concurrent_cycle_creation_yields_one_cycle() {
+  local project="$TEST_ROOT/xdh-race-cycle" repo="$TEST_ROOT/xdh-race-cycle-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-discovery/scripts/xdh"
+
+  # Two agents opening discovery on the same scope at the same moment.
+  local i
+  for i in 1 2 3 4; do
+    (cd "$repo" && "$xdh" cycle new --slug shared-scope > "$project/cycle-$i.out" 2>&1) &
+  done
+  wait
+
+  for i in 1 2 3 4; do
+    rg -q '^X_CYCLE=cycle-' "$project/cycle-$i.out"
+  done
+  # Exactly one Cycle directory, and exactly one of the runs claims to have
+  # created it: a second active Cycle for one scope makes every later lookup
+  # ambiguous.
+  [[ $(find "$repo/.dev-hub/active" -mindepth 1 -maxdepth 1 -type d | wc -l) -eq 1 ]]
+  [[ $(cat "$project"/cycle-*.out | rg -c '^X_CYCLE_REUSED=no$' || echo 0) -eq 1 ]]
+  [[ $(cat "$project"/cycle-*.out | rg '^X_CYCLE=' | sort -u | wc -l) -eq 1 ]]
+}
+
+test_xdh_concurrent_allocation_never_reuses_an_id() {
+  local project="$TEST_ROOT/xdh-race-id" repo="$TEST_ROOT/xdh-race-id-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-plan-eng/scripts/xdh"
+  (cd "$repo" && "$xdh" cycle new --slug race >/dev/null)
+
+  # Four different work items planned at once must get four different numbers.
+  local i
+  for i in 1 2 3 4; do
+    (cd "$repo" && "$xdh" item new --type issue --slug "item-$i" > "$project/item-$i.out" 2>&1) &
+  done
+  wait
+  [[ $(cat "$project"/item-*.out | rg '^X_ITEM_ID=' | sort -u | wc -l) -eq 4 ]]
+  [[ $(find "$repo/.dev-hub/active" -name 'IS-*.md' | wc -l) -eq 4 ]]
+
+  # The same work planned twice at once must produce one item, not two.
+  for i in 1 2 3; do
+    (cd "$repo" && "$xdh" item new --type issue --slug same-work > "$project/same-$i.out" 2>&1) &
+  done
+  wait
+  [[ $(find "$repo/.dev-hub/active" -name 'IS-*-same-work.md' | wc -l) -eq 1 ]]
+  [[ $(cat "$project"/same-*.out | rg '^X_ITEM_ID=' | sort -u | wc -l) -eq 1 ]]
+
+  # Two Work Groups claimed at once must not both become WG-001. This is the
+  # allocation that used to release its lock before writing the file.
+  local wg
+  for wg in alpha beta gamma; do
+    (cd "$repo" && "$xdh" wg new --slug "$wg" > "$project/wg-$wg.out" 2>&1) &
+  done
+  wait
+  for wg in alpha beta gamma; do
+    rg -q '^X_WG_ID=WG-' "$project/wg-$wg.out"
+  done
+  [[ $(cat "$project"/wg-*.out | rg '^X_WG_ID=' | sort -u | wc -l) -eq 3 ]]
+  [[ $(find "$repo/.dev-hub/active" -name 'WG-*.md' | wc -l) -eq 3 ]]
+  [[ $(git -C "$repo" branch --list 'x/*' | wc -l) -eq 3 ]]
+}
+
+test_xdh_refuses_to_guess_between_ambiguous_cycles() {
+  local project="$TEST_ROOT/xdh-ambiguous" repo="$TEST_ROOT/xdh-ambiguous-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-plan-eng/scripts/xdh"
+
+  (cd "$repo" && "$xdh" cycle new --slug first >/dev/null)
+  (cd "$repo" && "$xdh" cycle new --slug second >/dev/null)
+
+  # With two active Cycles an unqualified write must stop, not pick one.
+  if (cd "$repo" && "$xdh" item new --type issue --slug thing >"$project/amb.out" 2>&1); then
+    return 1
+  fi
+  rg -q 'multiple active cycles' "$project/amb.out"
+  [[ -z $(find "$repo/.dev-hub/active" -name 'IS-*.md') ]]
+
+  # Naming the target resolves it, by directory name or by slug.
+  (cd "$repo" && "$xdh" item new --type issue --slug thing --cycle second >/dev/null)
+  [[ $(find "$repo/.dev-hub/active" -name 'IS-001-thing.md' | wc -l) -eq 1 ]]
+  rg -q '^X_CYCLE=cycle-[0-9]{8}-[0-9]{4}-first$' \
+    <<<"$(cd "$repo" && "$xdh" cycle show --cycle first)"
+}
+
+test_xdh_recreates_a_stale_worktree_registration() {
+  local project="$TEST_ROOT/xdh-stale-wt" repo="$TEST_ROOT/xdh-stale-wt-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-plan-eng/scripts/xdh"
+  (cd "$repo" && "$xdh" cycle new --slug stale >/dev/null)
+
+  local worktree
+  worktree=$(cd "$repo" && "$xdh" wg new --slug widget |
+             rg -N --replace '$1' '^X_WG_WORKTREE=(.*)$')
+  [[ -d $worktree ]]
+
+  # Someone deletes the directory by hand; Git still has the registration.
+  rm -rf "$worktree"
+  git -C "$repo" worktree list --porcelain | rg -qF "worktree $worktree"
+
+  # Re-running must not report a usable worktree it cannot provide: the stale
+  # registration is pruned and the worktree recreated on the same branch.
+  local rerun
+  rerun=$(cd "$repo" && "$xdh" wg new --slug widget)
+  rg -q '^X_WORKTREE_PRUNED=yes$' <<<"$rerun"
+  rg -q '^X_WORKTREE_CREATED=yes$' <<<"$rerun"
+  rg -q '^X_WG_ID=WG-001$' <<<"$rerun"
+  rg -q '^X_WG_REUSED=yes$' <<<"$rerun"
+  [[ -d $worktree ]]
+  [[ $(git -C "$repo" -C "$worktree" rev-parse --abbrev-ref HEAD) == x/*-wg-001-widget ]]
+  [[ $(git -C "$repo" branch --list 'x/*' | wc -l) -eq 1 ]]
+
+  # A third run adopts the healthy worktree without touching anything.
+  rg -q '^X_WORKTREE_CREATED=no$' <<<"$(cd "$repo" && "$xdh" wg new --slug widget)"
+
+  # A directory occupying the path that is not the expected worktree is a stop,
+  # never something to silently overwrite.
+  rm -rf "$worktree"
+  git -C "$repo" worktree prune
+  mkdir -p "$worktree"
+  echo 'someone elses data' > "$worktree/keep.txt"
+  if (cd "$repo" && "$xdh" wg new --slug widget >"$project/occupied.out" 2>&1); then
+    return 1
+  fi
+  rg -q 'already occupied' "$project/occupied.out"
+  [[ -f "$worktree/keep.txt" ]]
+}
+
+# A fake gh that answers the one query xdh makes, so PR selection can be tested
+# without a network or a real GitHub repository.
+write_fake_gh() {
+  local bin=$1 rows=$2 owner=${3:-upstream}
+  mkdir -p "$bin"
+  cat > "$bin/gh" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "pr list") cat <<'ROWS'
+$rows
+ROWS
+    ;;
+  "repo view") printf '%s\n' '$owner' ;;
+  "pr edit") printf '%s\n' "EDITED \$3" >> "$bin/../gh-calls.log" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$bin/gh"
+}
+
+test_xdh_pr_lookup_distinguishes_forks() {
+  local project="$TEST_ROOT/xdh-pr" repo="$TEST_ROOT/xdh-pr-repo"
+  local bin="$TEST_ROOT/xdh-pr-bin"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-ship/scripts/xdh"
+  git -C "$repo" checkout -q -b fix
+  git -C "$repo" remote add origin 'git@github.com:contributor/skill-x.git'
+
+  # Without a provider the answer is "no provider", never an invented PR.
+  rg -q '^X_PR_STATE=no-provider$' \
+    <<<"$(cd "$repo" && PATH=/usr/bin:/bin "$xdh" pr status)"
+
+  # Two forks have an open PR from a branch called `fix`. Matching on the
+  # branch name alone would pick whichever came first and overwrite it.
+  write_fake_gh "$bin" "$(printf '7\thttps://x/pull/7\tfix\tsomeone-else\n9\thttps://x/pull/9\tfix\tcontributor\n11\thttps://x/pull/11\tother\tcontributor')"
+  local status
+  status=$(cd "$repo" && PATH="$bin:$PATH" "$xdh" pr status)
+  rg -q '^X_PR_HEAD_OWNER=contributor$' <<<"$status"
+  rg -q '^X_PR_STATE=open$' <<<"$status"
+  rg -q '^X_PR_NUMBER=9$' <<<"$status"
+  rg -q '^X_PR_URL=https://x/pull/9$' <<<"$status"
+
+  # An update targets that PR and no other.
+  printf 'body\n' > "$project/body.md"
+  local upsert
+  upsert=$(cd "$repo" && PATH="$bin:$PATH" "$xdh" pr upsert \
+             --base main --title 't' --body-file "$project/body.md")
+  rg -q '^X_PR_ACTION=updated$' <<<"$upsert"
+  rg -qx 'EDITED 9' "$TEST_ROOT/xdh-pr-bin/../gh-calls.log"
+
+  # When the owner cannot break the tie, refuse rather than overwrite one.
+  write_fake_gh "$bin" "$(printf '7\thttps://x/pull/7\tfix\t\n9\thttps://x/pull/9\tfix\t')"
+  rg -q '^X_PR_STATE=ambiguous$' \
+    <<<"$(cd "$repo" && PATH="$bin:$PATH" "$xdh" pr status)"
+  if (cd "$repo" && PATH="$bin:$PATH" "$xdh" pr upsert --base main --title t \
+        --body-file "$project/body.md" >"$project/amb-pr.out" 2>&1); then
+    return 1
+  fi
+  rg -q 'several open PRs match' "$project/amb-pr.out"
+}
+
+test_xdh_keeps_every_temporary_file_inside_the_project() {
+  local project="$TEST_ROOT/xdh-tmp" repo="$TEST_ROOT/xdh-tmp-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-review/scripts/xdh"
+
+  # Pointing TMPDIR at a directory that does not exist is the only assertion
+  # that actually bites: a helper that stages through the shared temp directory
+  # fails outright here, while one that stages beside its target does not care.
+  # (Checking for leftovers instead would pass even for a /tmp write that is
+  # cleaned up afterwards.)
+  local forbidden="$TEST_ROOT/xdh-tmp-does-not-exist"
+  run_xdh_without_tmpdir() { (cd "$repo" && TMPDIR="$forbidden" "$xdh" "$@"); }
+
+  run_xdh_without_tmpdir cycle new --slug tmp-check >/dev/null
+  local item
+  item=$(run_xdh_without_tmpdir item new --type issue --slug thing |
+         rg -N --replace '$1' '^X_ITEM_FILE=(.*)$')
+  run_xdh_without_tmpdir field set "$item" Status ready >/dev/null
+  run_xdh_without_tmpdir fingerprint >/dev/null
+  run_xdh_without_tmpdir wg new --slug tmp-wg >/dev/null
+
+  [[ ! -e $forbidden ]]
+  rg -q '^- Status: ready$' "$item"
+  # Nothing is left behind beside the documents that were staged, either.
+  [[ -z $(find "$repo/.dev-hub" -name '.xdh-field.*') ]]
+  [[ -z $(find "$repo/.dev-hub" -name '.xdh-write.*') ]]
+  [[ -z $(find "$repo/.dev-hub/runtime/.tmp" -type f 2>/dev/null) ]]
+}
+
+test_xdh_cleanup_survives_a_path_containing_spaces() {
+  # The repository sits under a directory with a space, as it routinely does on
+  # macOS ("My Projects", "Mobile Documents"). Word-splitting the scan records
+  # truncated every path at the first space.
+  local project="$TEST_ROOT/xdh-space" repo="$TEST_ROOT/xdh-space/with space/repo"
+  copy_project "$project"
+  "$project/bin/build.sh" >/dev/null
+  mkdir -p "$repo"
+  git init -q -b main "$repo"
+  git -C "$repo" config user.email test@example.invalid
+  git -C "$repo" config user.name 'Test Runner'
+  echo seed > "$repo/seed.txt"
+  git -C "$repo" add -A
+  git -C "$repo" commit -qm initial
+  local xdh="$project/commands/x-housekeeping/scripts/xdh"
+
+  # The decoy is exactly what the truncated path resolved to. If cleanup ever
+  # word-splits again, this directory is what rm -rf destroys.
+  local decoy="$TEST_ROOT/xdh-space/with"
+  mkdir -p "$decoy"
+  echo 'unrelated data' > "$decoy/decoy.txt"
+
+  (cd "$repo" && "$xdh" cycle new --slug spaced >/dev/null)
+  local worktree
+  worktree=$(cd "$repo" && "$xdh" wg new --slug widget |
+             rg -N --replace '$1' '^X_WG_WORKTREE=(.*)$')
+  [[ $worktree == *' '* ]]
+
+  # Uncommitted work is still protected when the path has a space — the old
+  # parse made `git -C <truncated> status` fail, which read as "clean".
+  echo scratch > "$worktree/scratch.txt"
+  rg -q '^ITEM\tDIRTY\tworktree\t' <<<"$(cd "$repo" && "$xdh" clean scan)"
+  (cd "$repo" && "$xdh" clean apply >/dev/null)
+  [[ -d $worktree ]]
+  [[ -f "$worktree/scratch.txt" ]]
+
+  # And a genuinely finished worktree is actually removed, not left behind
+  # with "removal-failed".
+  rm -f "$worktree/scratch.txt"
+  rg -q '^ITEM\tSAFE\tworktree\t' <<<"$(cd "$repo" && "$xdh" clean scan)"
+  local applied
+  applied=$(cd "$repo" && "$xdh" clean apply)
+  rg -q '^REMOVED worktree ' <<<"$applied"
+  [[ ! -d $worktree ]]
+
+  # Nothing outside the repository was touched.
+  [[ -f "$decoy/decoy.txt" ]]
+  [[ $(cat "$decoy/decoy.txt") == 'unrelated data' ]]
+  [[ -d "$TEST_ROOT/xdh-space/with space" ]]
+}
+
+test_xdh_standalone_planning_is_reusable() {
+  local project="$TEST_ROOT/xdh-standalone" repo="$TEST_ROOT/xdh-standalone-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-plan-eng/scripts/xdh"
+  # No Cycle anywhere: this is x-plan-eng invoked on a single requirement.
+  [[ ! -d "$repo/.dev-hub/active" || -z $(find "$repo/.dev-hub/active" -mindepth 1) ]]
+
+  # Work items need no flag and reuse on the second call.
+  local first second
+  first=$(cd "$repo" && "$xdh" item new --type issue --slug lone-task)
+  rg -q '^X_ITEM_ID=IS-001$' <<<"$first"
+  rg -q '^X_ITEM_REUSED=no$' <<<"$first"
+  second=$(cd "$repo" && "$xdh" item new --type issue --slug lone-task)
+  rg -q '^X_ITEM_REUSED=yes$' <<<"$second"
+  [[ $(rg '^X_ITEM_FILE=' <<<"$first") == "$(rg '^X_ITEM_FILE=' <<<"$second")" ]]
+  [[ $(find "$repo/.dev-hub" -name 'IS-*.md' | wc -l) -eq 1 ]]
+
+  # A second, different item shares the standalone ID space.
+  rg -q '^X_ITEM_ID=IS-002$' <<<"$(cd "$repo" && "$xdh" item new --type issue --slug other-task)"
+
+  # Work Groups reuse too: the scope must not move between invocations, or the
+  # same slug ends up with a second branch and a second worktree.
+  local wg1 wg2
+  wg1=$(cd "$repo" && "$xdh" wg new --slug lone-task --items IS-001)
+  rg -q '^X_WG_ID=WG-001$' <<<"$wg1"
+  rg -q '^X_WG_REUSED=no$' <<<"$wg1"
+  wg2=$(cd "$repo" && "$xdh" wg new --slug lone-task)
+  rg -q '^X_WG_REUSED=yes$' <<<"$wg2"
+  rg -q '^X_WORKTREE_CREATED=no$' <<<"$wg2"
+  [[ $(rg '^X_WG_BRANCH=' <<<"$wg1") == "$(rg '^X_WG_BRANCH=' <<<"$wg2")" ]]
+  [[ $(rg '^X_WG_FILE=' <<<"$wg1") == "$(rg '^X_WG_FILE=' <<<"$wg2")" ]]
+  [[ $(git -C "$repo" branch --list 'x/*' | wc -l) -eq 1 ]]
+  [[ $(git -C "$repo" worktree list | wc -l) -eq 2 ]]
+  [[ $(find "$repo/.dev-hub" -name 'WG-*.md' | wc -l) -eq 1 ]]
+
+  # Concurrent standalone planning is mutually excluded, which it cannot be
+  # while the lock lives in a directory minted fresh per invocation.
+  local wg
+  for wg in alpha beta gamma; do
+    (cd "$repo" && "$xdh" wg new --slug "$wg" > "$project/sa-$wg.out" 2>&1) &
+  done
+  wait
+  [[ $(cat "$project"/sa-*.out | rg '^X_WG_ID=' | sort -u | wc -l) -eq 3 ]]
+
+  # An explicit --dir still wins, for callers that want an isolated bundle.
+  local bundle
+  bundle=$(cd "$repo" && "$xdh" runtime new --skill x-plan-eng --slug bundle |
+           rg -N --replace '$1' '^X_RUNTIME_DIR=(.*)$')
+  rg -q "^X_ITEM_FILE=$bundle/IS-001-scoped\.md$" \
+    <<<"$(cd "$repo" && "$xdh" item new --type issue --slug scoped --dir "$bundle")"
+}
+
+test_xdh_housekeeping_spares_runtime_holding_live_work() {
+  local project="$TEST_ROOT/xdh-live" repo="$TEST_ROOT/xdh-live-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-housekeeping/scripts/xdh"
+
+  (cd "$repo" && "$xdh" wg new --slug ongoing >/dev/null)
+  local standalone="$repo/.dev-hub/runtime/standalone"
+  [[ -d $standalone ]]
+  local wg_file
+  wg_file=$(find "$standalone" -name 'WG-*.md' | head -1)
+  [[ -n $wg_file ]]
+
+  # Age it well past the retention window. Age alone must not make live
+  # planning state collectable, or an open Work Group gets rm -rf'd.
+  touch -d '60 days ago' "$standalone"
+  local scan
+  scan=$(cd "$repo" && "$xdh" clean scan)
+  rg -q "^ITEM\tACTIVE\truntime\t$standalone\tholds-live-work$" <<<"$scan"
+  (cd "$repo" && "$xdh" clean apply >/dev/null)
+  [[ -f $wg_file ]]
+
+  # Once the work is finished, the same directory becomes collectable.
+  (cd "$repo" && "$xdh" field set "$wg_file" Status merged >/dev/null)
+  touch -d '60 days ago' "$standalone"
+  rg -q "^ITEM\tSAFE\truntime\t$standalone\t" <<<"$(cd "$repo" && "$xdh" clean scan)"
+}
+
 run_test 'build injects once and copies support files' test_build_injects_header_and_support_files
 run_test 'invalid build preserves previous deployment' test_build_rejects_invalid_frontmatter_without_destroying_output
 run_test 'build accepts crlf frontmatter' test_build_accepts_crlf_frontmatter
@@ -404,6 +941,21 @@ run_test 'update check fails open without a remote' test_update_check_fails_open
 run_test 'apply update fast-forwards and resynchronizes' test_apply_update_fast_forwards_and_resyncs
 run_test 'cloud bootstrap installs copies from a pinned ref' test_cloud_bootstrap_copies_pinned_content
 run_test 'cloud bootstrap installs pinned command shims' test_cloud_bootstrap_installs_command_shims
+run_test 'build materializes shared x-skill assets' test_build_materializes_shared_skill_assets
+run_test 'xdh creates cycles and work items idempotently' test_xdh_creates_cycles_and_items_idempotently
+run_test 'xdh binds one work group to one branch and worktree' test_xdh_work_group_binds_branch_and_worktree
+run_test 'xdh fingerprints content, not time' test_xdh_fingerprint_tracks_content_not_time
+run_test 'xdh housekeeping refuses unsafe removals' test_xdh_housekeeping_refuses_unsafe_removals
+run_test 'xdh closes a cycle into a tracked log' test_xdh_cycle_closes_into_a_tracked_log
+run_test 'xdh concurrent cycle creation yields one cycle' test_xdh_concurrent_cycle_creation_yields_one_cycle
+run_test 'xdh concurrent allocation never reuses an id' test_xdh_concurrent_allocation_never_reuses_an_id
+run_test 'xdh refuses to guess between ambiguous cycles' test_xdh_refuses_to_guess_between_ambiguous_cycles
+run_test 'xdh recreates a stale worktree registration' test_xdh_recreates_a_stale_worktree_registration
+run_test 'xdh pr lookup distinguishes forks' test_xdh_pr_lookup_distinguishes_forks
+run_test 'xdh keeps temporary files inside the project' test_xdh_keeps_every_temporary_file_inside_the_project
+run_test 'xdh cleanup survives a path containing spaces' test_xdh_cleanup_survives_a_path_containing_spaces
+run_test 'xdh standalone planning is reusable' test_xdh_standalone_planning_is_reusable
+run_test 'xdh housekeeping spares runtime holding live work' test_xdh_housekeeping_spares_runtime_holding_live_work
 
 printf '\nRESULT: %d passed, %d failed\n' "$passed" "$failed"
 (( failed == 0 ))

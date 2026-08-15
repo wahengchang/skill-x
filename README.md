@@ -55,6 +55,43 @@ canonical skill 的唯一來源仍是 `commands-src/<name>/`；不要直接編�
 
 支援檔案（例如 `scripts/`、`references/`）會一併複製。修改 `_shared/update-check-header.md` 後也必須重跑 `bin/build.sh`。
 
+## `x-*` 開發週期技能組
+
+`x-` 前綴的六顆技能是一整套開發流程：把一次盤點變成 Cycle、把工作準備到可直接開工、由獨立 Agent 審查、以證據除錯、交付成一個 PR，最後把完成的 Cycle 壓成一份短 log。
+
+| 技能 | 回答的問題 | 主要輸出 |
+| --- | --- | --- |
+| `x-discovery` | 這個範圍內有哪些工作？ | `.dev-hub/active/cycle-*/hub.md` 與 `WK-XXX` 工作總表 |
+| `x-plan-eng` | 每項工作要做什麼、工程上怎麼做？ | `IS-*` / `SP-*` / `WG-*`、Owner、branch 與 worktree |
+| `x-review` | 這份最終內容有什麼真實風險？ | `RV-*`（含 severity、`file:line`、失效情境） |
+| `x-debug` | 已知問題的 root cause 是什麼？ | `DBG-*`、根因修正與 regression test |
+| `x-ship` | 能否安全交付，並形成一個 PR？ | commits、pushed branch、create-or-update 的單一 PR |
+| `x-housekeeping` | 哪些執行殘留已可安全刪除？ | 清理結果與 `.dev-hub/logs/cycle-*.md` |
+
+六顆技能都能只憑「專案背景、repo 文件、程式碼、Prompt」獨立啟動，不需要先有 Cycle。使用者輸入 `continue` 時，接續依據是 artifact 裡的 Handover 區塊，沒有隱藏的全域狀態機。
+
+執行期狀態一律留在 repo 內的 `.dev-hub/`，不寫 `~/.x-*` 或系統 `/tmp`：
+
+```text
+.dev-hub/
+├── active/      進行中的 Cycle（ignored）
+├── worktrees/   WG 的 linked worktrees（ignored）
+├── runtime/     standalone 執行的暫存（ignored）
+│   └── standalone/  沒有 Cycle 時的規劃文件；路徑固定，才能重用與上鎖
+└── logs/        完成 Cycle 的短紀錄（tracked，唯一會進 Git 的部分）
+```
+
+重複、可驗證的操作由技能資料夾內的 `scripts/xdh` 負責：從任一 worktree 解析共用 `.dev-hub`、發配不重複的 ID、冪等地建立 Cycle / work item / WG / branch / worktree、計算綁定內容的 review fingerprint、create-or-update 單一 PR，以及只刪除「已證明安全」的殘留。所有輸出都是 `KEY=value`，重跑不會產生第二份 Cycle、worktree 或 PR。
+
+```bash
+bin/doctor.sh                       # 確認技能已同步
+~/.claude/skills/x-discovery/scripts/xdh help
+```
+
+三顆核心規則值得單獨記住：`1 WG = 1 branch = 1 worktree = 1 PR`；最終 review 必須由非實作者的 Agent 執行，否則結果是 `BLOCKED` 而不是降級的 self-review；approval 綁定 fingerprint，內容一改就失效。
+
+方法論參考 Garry Tan 的 [`gstack`](https://github.com/garrytan/gstack)（snapshot `d078622`，MIT），只借用流程與紀律，不使用其 global state、telemetry 或 reviewer auto-fix 行為；詳見各技能的 Provenance 段落。
+
 ## 範例技能
 
 `funny-text-rewriter` 是一個適合新手參考的簡單技能：提供任意文字並要求改寫得有趣，它會保留原意與重要細節，只調整表達風格。例如：
@@ -93,7 +130,7 @@ bin/cloud-bootstrap.sh <private-repo-url> <tag-or-commit>
 make test
 ```
 
-測試結束時應顯示 `RESULT: 15 passed, 0 failed`。這能驗證 shell 腳本與檔案行為；Claude Code、Codex CLI、OpenCode 是否實際發現技能，以及 AI 是否依照自然語言指示詢問，仍需分別在三個工具做端到端人工 smoke test：
+測試結束時應顯示 `RESULT: 30 passed, 0 failed`。這能驗證 shell 腳本與檔案行為；Claude Code、Codex CLI、OpenCode 是否實際發現技能，以及 AI 是否依照自然語言指示詢問，仍需分別在三個工具做端到端人工 smoke test：
 
 1. 執行 `./install.sh` 與 `bin/doctor.sh`，確認四個技能路徑與 OpenCode command 區段皆為 `OK`。
 2. 重新啟動三個工具（skills 與 commands 在啟動時載入）。

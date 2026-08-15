@@ -73,6 +73,24 @@ git commit -m "add myapp-* skill set (deploy, rollback, status)"
 git push
 ```
 
+### 一組技能共用同一份腳本
+
+如果一組技能要共用腳本或樣板（`x-*` 就是這樣），**不要在每顆技能各放一份副本**——會漂移。作法是把共用檔案放在一個以底線開頭、不含 `SKILL.md` 的目錄（因此 `bin/build.sh` 不會把它當技能），再從各技能 symlink 過去：
+
+```bash
+mkdir -p commands-src/_myapp-shared/scripts
+# commands-src/_myapp-shared/scripts/helper.sh ...
+
+for s in myapp-deploy myapp-rollback; do
+  ln -sfn ../_myapp-shared/scripts "commands-src/$s/scripts"
+done
+bin/build.sh
+```
+
+`bin/build.sh` 會解引用 symlink（`find -L` + `cp -aL`），所以 `commands/<name>/scripts/` 是**真實副本**，執行權限也保留。這是必要的：每顆技能是各自 symlink 進 `~/.claude/skills/<name>` 的，執行期讀不到兄弟技能的檔案（見 ARCHITECTURE.md 決策 #10）。
+
+代價是 `commands/` 底下會出現多份相同副本——那是產生物，跟注入的更新檢查標頭一樣，照常一起 commit。
+
 ### 修改既有技能 / 修改共用的更新檢查邏輯
 
 - 改某顆技能：直接改 `commands-src/<name>/SKILL.md`，一樣跑 `bin/build.sh` + `make test` + commit 三個資料夾。
@@ -100,6 +118,7 @@ git push
 - **改了 `commands/` 卻沒改 `commands-src/`**：下次任何人跑 `bin/build.sh` 都會把你的改動蓋掉。永遠改 `commands-src/`。
 - **改了 `commands-src/` 但忘記跑 `bin/build.sh` 就 commit**：`commands/` 會跟原始碼不同步，其他機器 `sync-skills.sh` 之後拿到的是舊的部署版本。
 - **只 commit 了其中一個資料夾**：三個一定要一起 commit，這是這個架構「不需要在每台機器上跑 build 工具鏈」的前提（見 ARCHITECTURE.md 決策 #7）。
+- **共用資料夾放了 `SKILL.md`**：`commands-src/_x-shared/SKILL.md` 會讓 build 把它當成一顆名為 `_x-shared` 的技能。共用目錄底下只放支援檔。
 - **`name:` 跟資料夾名不一致**：目前無自動檢查，純靠自律；建議寫的當下就對照一次。
 - **跑 `make test` 前沒裝 `ripgrep`**：測試腳本用 `rg` 做輸出比對，`brew install ripgrep` / `apt install ripgrep` 先裝好。
 

@@ -37,6 +37,8 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 7. **作者版與部署版都入庫**：其他機器 pull 後不必具備 build 工具鏈即可同步。
 8. **雙版本節奏**：個人電腦 rolling，image pinned。
 9. **叫用管道按工具補齊**：Claude Code 與 Codex 從 skills 目錄自動產生 `/<skill>` 與 `$<skill>`，OpenCode v2 也有原生 slash 目錄，只有 OpenCode v1 需要額外的 command 檔案。因此只為 v1 產生 shim，其餘工具不產生任何重複項目，也不安裝 Codex 已棄用的 custom prompts。
+10. **共用支援檔以 symlink 收斂、以複製部署**：一組技能若共用同一份腳本，作者版只保留一份（`commands-src/_x-shared/`），各技能以 symlink 指過去；`bin/build.sh` 用 `find -L` 與 `cp -aL` 解引用，讓 `commands/<name>/` 得到真實副本。這是必要的：技能是各自 symlink 進 `~/.claude/skills/<name>` 的，執行期無法保證讀得到兄弟技能的檔案，所以部署版必須自給自足。決策 #2（內容不分支）仍然成立——收斂的是**來源**，不是內容。
+11. **開發週期狀態一律 project-local**：`x-*` 技能組的所有執行期狀態放在 repo 內的 `.dev-hub/`，不使用 `~/.x-*` 或系統 `/tmp`。`active/`、`worktrees/`、`runtime/` 由 `xdh` 自動加進 `.gitignore`；只有 `logs/` 進 Git。理由是可稽核與可丟棄：一個 Cycle 的全部痕跡都能用一般 Git 指令檢視或清掉，換機器也不會帶著看不見的全域狀態。
 
 ## 核心機制
 
@@ -50,6 +52,31 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 
 - shim 內容刻意極薄——指示 OpenCode 用 `skill` 工具載入 canonical skill、轉送 `$ARGUMENTS`，並帶一個 `skill-x-managed-command` 標記。技能內容不複製，避免出現第二份會過期的指示。
 - `bin/opencode-version.sh` 解析 `opencode --version` 的主版號決定 v1／v2，`SKILL_X_OPENCODE_VERSION=auto|v1|v2` 可覆寫。偵測失敗時回退 v1 並在 stderr 說明；v1 安裝 shim symlink，v2 反向移除自己產生的 shim，兩者都不動使用者自有的 command 檔案。
+
+### `x-*` 開發週期技能組
+
+六顆技能（`x-discovery`、`x-plan-eng`、`x-review`、`x-debug`、`x-ship`、`x-housekeeping`）共用一份 `commands-src/_x-shared/`，內含 `scripts/xdh` 與七份 Markdown 樣板。分工是刻意的：**技能負責判斷，腳本負責可重複的操作**。
+
+`xdh` 的責任邊界：
+
+| 子指令 | 責任 |
+| --- | --- |
+| `paths` / `init` | 以 `git rev-parse --git-common-dir` 從任一 linked worktree 解析回 main repo，建立 `.dev-hub` 骨架與 `.gitignore` |
+| `cycle new/list/show/check/close` | 建立或沿用 Cycle、關閉前檢查 gate、把完成 Cycle 壓成 `logs/` 短紀錄 |
+| `id next`、`item new`、`wg new`、`artifact new` | 在 `mkdir` 互斥鎖內完成「檢查既有 → 配號 → 建檔」，避免兩個 agent 拿到同一個編號 |
+| `field get/set` | 以 atomic write 改寫單一 `- Field: value`，保留檔案其餘所有內容 |
+| `fingerprint [verify]` | 把整個工作狀態（含未 commit 變更）寫進暫時 index 並取得 tree，作為 review 目標 |
+| `pr status/upsert` | 以 head branch **與 head repository owner** 兩者定位 PR，create-or-update 單一 PR；沒有 `gh` 就回報 `no-provider` 而不是假裝有 PR |
+| `worktree`、`clean scan/apply` | 分類 SAFE / DIRTY / UNMERGED / ACTIVE / ORPHAN，只刪 SAFE，且刪前再檢查一次 |
+
+六個設計選擇值得說明：
+
+- **Fingerprint 綁內容，不綁時間。** 用暫時 `GIT_INDEX_FILE` 做 `read-tree` + `add -A` + `write-tree`，得到的 tree 同時涵蓋已 commit 與未 commit 的內容，因此「把未 commit 的東西 commit 起來」不會改變 fingerprint，而任何一個字元的改動都會。快照前會先把 `.dev-hub/active|runtime|worktrees` 從暫時 index 移除，否則這個指令自己產生的暫存檔會讓結果不穩定。
+- **「檢查既有」與「配號建檔」必須在同一個 critical section。** `id next` 只是查詢；真正保證不重號的是 `cycle new` / `item new` / `wg new` / `artifact new`——它們在同一個鎖裡完成「掃描是否已存在 → 取最大號 +1 → 寫檔（讓下一次掃描看得到）」。只鎖住配號、把寫檔留到鎖外，會讓兩個同時規劃的 agent 都掃到空目錄、都拿到 `WG-001`。`cycle new` 也要上鎖：目錄名帶到分鐘的時間戳，跨分鐘邊界的兩個併發呼叫會建出兩個同 slug 的 active Cycle，之後每一次 lookup 都變成 ambiguous。
+- **worktree 的「已註冊」不等於「可用」。** 目錄被手動刪掉時 `git worktree list` 仍會列出它。所以重用前要確認 `path/.git` 真的存在、而且 HEAD 就在預期的 branch 上；註冊是 stale 就 `git worktree prune` 後重建，路徑被無關內容佔用則直接停下來，不覆蓋。
+- **機器可讀記錄一律 TSV。** 路徑會含空白（macOS 的 `My Projects`、`Mobile Documents` 是常態），所以以空白分隔的記錄不是格式而是陷阱：`clean apply` 曾用 `read -r _ class kind target rest` 解析，repo 位於 `/home/u/proj v2/` 時 `target` 被截成 `/home/u/proj`，dirty 護欄因為 `git -C <截斷路徑>` 失敗而靜默通過，`rm -rf` 則打到一個真實存在的同層目錄。現在 `clean scan`、`worktree list` 與 `pr` 查詢一律 tab 分隔、以 `IFS=$'\t'` 讀取；刪除前另有一道與解析無關的收容檢查，確保任何 kind 都只能刪到它該待的目錄底下。
+- **standalone scope 必須是固定路徑。** 沒有 Cycle 時，規劃文件的 scope 曾用 `xdh runtime new` 產生帶秒級時間戳的目錄，等於每次呼叫都換一個位置：reuse 掃描永遠掃到空的、ID 每次從 001 重來、跨分鐘重跑會替同一個 slug 生出第二條 branch 與第二個 worktree，而且鎖開在那個每次都不同的目錄裡——standalone 模式根本沒有互斥。現在固定為 `.dev-hub/runtime/standalone/`，Cycle 模式與 standalone 模式走同一套 reuse／配號／上鎖邏輯。相對的，`clean scan` 也必須知道「含有未終結 WG／work item 的 runtime 目錄是活的」，否則保留期一過就會把還開著的 Work Group 刪掉。work item 與 WG 的終結狀態不同（前者 done/cancelled/deferred，後者 merged/closed/…），這個判斷收斂在 `x_status_is_terminal`，避免 closure gate 與 housekeeping 兩處各寫一份而漂移。
+- **PR 不能只用 branch name 當 key。** branch 推到 fork 時，同一個 base repository 上可能有多個 fork 都開著叫 `fix` 的 PR。因此查詢會同時比對 `headRefName` 與 `headRepositoryOwner`（owner 由 push remote 的 URL 推得）；仍然分不出來時回報 `X_PR_STATE=ambiguous` 並拒絕更新，而不是賭一個把別人的 PR body 蓋掉。查詢用 `gh --jq` 輸出 TSV，比對留在 shell 字串比較，既避免手寫 JSON parser，也讓這段邏輯可以被測試。
 
 ### 更新檢查
 
@@ -73,6 +100,7 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 
 ```text
 commands-src/                  手動編輯的作者版
+commands-src/_x-shared/        x-* 技能組共用的 xdh 腳本與 Markdown 樣板（各技能以 symlink 引用）
 commands/                      build 產生、需 commit 的部署版
 opencode-commands/             build 產生、需 commit 的 OpenCode v1 command shim
 .codex/skills/canonicalize-skill/ Codex 建置環境專用的 raw skill authoring tool（不分發）
@@ -98,6 +126,10 @@ tests/run.sh                   不需網路的整合測試
 5. **狀態無鎖（低）**：同時呼叫可能競爭寫入 timestamp，但個人使用影響有限。
 6. **跨機與三工具實測待補**：優先測 pull、拒絕/snooze、重新啟動後技能發現與 `/`、`$` 叫用。
 7. **OpenCode 版本判定是啟發式（中）**：只讀 `opencode --version` 的主版號，偵測不到時回退 v1。同一台機器裝多個 OpenCode 版本或版本字串改格式時，須用 `SKILL_X_OPENCODE_VERSION` 明確指定。
+8. **`xdh pr` 只支援 GitHub `gh`（中）**：沒有 `gh` 時回報 `X_PR_PROVIDER=none`，由技能改成輸出手動建立 PR 的指示。要支援 GitLab 等平台需再加一個 provider 分支。head owner 由 push remote URL 推得，若 remote 未設定則退回只比對 branch name，此時多筆相符會回報 `ambiguous` 而不是任選一筆。
+9. **獨立 Reviewer 由 host 決定（中）**：`x-review` 要求另一個 Agent，但能否真的啟動獨立 Agent 取決於當下工具。無法啟動時規定回報 `BLOCKED_NO_INDEPENDENT_REVIEWER`，這條是靠指示而非機制保證的。
+10. **`.dev-hub` 沿用者的既有 `.gitignore`（低）**：`xdh` 只在缺少時附加三行，不會移除使用者自己寫的規則；若使用者手動刪掉這些行，Cycle 內容可能被誤 commit。
+11. **鎖是同機器內的（低）**：`x_lock` 用 `mkdir` 互斥，只保護同一台機器上的併發 agent。若 `.dev-hub` 放在多台機器共掛的網路檔案系統上，`mkdir` 的原子性不再保證。超過兩分鐘未釋放的鎖會被視為死行程留下的而清除。
 
 ## 未採用方案
 
