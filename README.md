@@ -1,8 +1,8 @@
 # skill-x
 
-把同一組個人 `SKILL.md` 技能部署到 Claude Code、Codex CLI 與 OpenCode。Git repository 是唯一來源；個人電腦使用 symlink 與可選更新，容器 image 則安裝固定版本的副本。
+skill-x 是一套參考 Garry Tan 的 gstack 產品形態打造的個人 skill 管理框架。它以 Git repository 作為唯一來源，透過單一入口 `bin/skill-x` 管理整組 skill set 的 install、update 與 uninstall，並將同一組技能同步到 Codex、Claude Code 與 OpenCode；個人電腦使用 symlink 與可選更新，容器 image 則安裝固定版本的副本。
 
-整個生命週期由一個入口 `bin/skill-x` 負責：安裝、檢視、更新、修復、移除都不需要讀腳本原始碼。
+內建的 `x-discovery`、`x-plan-eng`、`x-review`、`x-debug`、`x-ship` 與 `x-housekeeping` 六顆技能，串起設計 → 開發 → ship 的 handover 週期，讓各階段的工作脈絡能持續交接。
 
 ## 五分鐘快速上手
 
