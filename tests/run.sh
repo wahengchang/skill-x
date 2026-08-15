@@ -132,6 +132,7 @@ test_sync_installs_opencode_v1_commands() {
   "$project/bin/build.sh" >/dev/null
   mkdir -p "$commands"
   echo 'user owned' > "$commands/example-skill.md"
+  cp "$project/opencode-commands/herdr.md" "$commands/herdr.md"
 
   HOME="$home" SKILL_X_OPENCODE_VERSION=v1 "$project/bin/sync-skills.sh" >/dev/null 2>"$project/warnings"
   HOME="$home" SKILL_X_OPENCODE_VERSION=v1 "$project/bin/sync-skills.sh" >/dev/null 2>>"$project/warnings"
@@ -143,8 +144,13 @@ test_sync_installs_opencode_v1_commands() {
 
   # Everything else is linked once, idempotently, at the canonical shim.
   [[ -L "$commands/funny-text-rewriter.md" ]]
-  [[ $(readlink "$commands/funny-text-rewriter.md") == "$project/opencode-commands/funny-text-rewriter.md" ]]
+  [[ "$(realpath -- "$(readlink "$commands/funny-text-rewriter.md")")" == \
+     "$(realpath -- "$project/opencode-commands/funny-text-rewriter.md")" ]]
   [[ $(find "$commands" -mindepth 1 -maxdepth 1 -name 'funny-text-rewriter.md' | wc -l) -eq 1 ]]
+  # A copied shim managed by skill-x is safely converted to the local symlink form.
+  [[ -L "$commands/herdr.md" ]]
+  [[ "$(realpath -- "$(readlink "$commands/herdr.md")")" == \
+     "$(realpath -- "$project/opencode-commands/herdr.md")" ]]
 }
 
 test_sync_removes_stale_opencode_commands() {
@@ -371,12 +377,14 @@ test_cloud_bootstrap_installs_command_shims() {
   ref=$(git -C "$project" rev-parse HEAD)
   mkdir -p "$commands"
   echo 'user owned' > "$commands/example-skill.md"
+  ln -s "$project/opencode-commands/herdr.md" "$commands/herdr.md"
 
   HOME="$home" SKILL_X_OPENCODE_VERSION=v1 \
     "$project/bin/cloud-bootstrap.sh" "file://$remote" "$ref" >/dev/null 2>"$project/cloud-warnings"
 
   # Pinned images get copies, not links, and never clobber a user's own command.
   [[ -f "$commands/funny-text-rewriter.md" && ! -L "$commands/funny-text-rewriter.md" ]]
+  [[ -f "$commands/herdr.md" && ! -L "$commands/herdr.md" ]]
   rg -qF '$ARGUMENTS' "$commands/funny-text-rewriter.md"
   [[ $(cat "$commands/example-skill.md") == 'user owned' ]]
   rg -q 'non-managed command' "$project/cloud-warnings"
@@ -480,11 +488,13 @@ test_xdh_work_group_binds_branch_and_worktree() {
   [[ $(git -C "$repo" branch --list 'x/*' | wc -l) -eq 1 ]]
 
   # A skill invoked inside the linked worktree must still find the shared hub.
-  local from_worktree
+  local from_worktree canonical_repo canonical_worktree
   from_worktree=$(cd "$worktree" && "$xdh" paths)
-  rg -qx "X_MAIN_ROOT=$repo" <<<"$from_worktree"
-  rg -qx "X_DEV_HUB=$repo/.dev-hub" <<<"$from_worktree"
-  rg -qx "X_CURRENT_ROOT=$worktree" <<<"$from_worktree"
+  canonical_repo=$(cd "$repo" && pwd -P)
+  canonical_worktree=$(cd "$worktree" && pwd -P)
+  rg -qx "X_MAIN_ROOT=$canonical_repo" <<<"$from_worktree"
+  rg -qx "X_DEV_HUB=$canonical_repo/.dev-hub" <<<"$from_worktree"
+  rg -qx "X_CURRENT_ROOT=$canonical_worktree" <<<"$from_worktree"
 }
 
 test_xdh_fingerprint_tracks_content_not_time() {
@@ -905,7 +915,8 @@ test_xdh_housekeeping_spares_runtime_holding_live_work() {
   local xdh="$project/commands/x-housekeeping/scripts/xdh"
 
   (cd "$repo" && "$xdh" wg new --slug ongoing >/dev/null)
-  local standalone="$repo/.dev-hub/runtime/standalone"
+  local standalone
+  standalone=$(cd "$repo/.dev-hub/runtime/standalone" && pwd -P)
   [[ -d $standalone ]]
   local wg_file
   wg_file=$(find "$standalone" -name 'WG-*.md' | head -1)
@@ -913,7 +924,7 @@ test_xdh_housekeeping_spares_runtime_holding_live_work() {
 
   # Age it well past the retention window. Age alone must not make live
   # planning state collectable, or an open Work Group gets rm -rf'd.
-  touch -d '60 days ago' "$standalone"
+  touch -t 200001010000.00 "$standalone"
   local scan
   scan=$(cd "$repo" && "$xdh" clean scan)
   rg -q "^ITEM\tACTIVE\truntime\t$standalone\tholds-live-work$" <<<"$scan"
@@ -922,8 +933,208 @@ test_xdh_housekeeping_spares_runtime_holding_live_work() {
 
   # Once the work is finished, the same directory becomes collectable.
   (cd "$repo" && "$xdh" field set "$wg_file" Status merged >/dev/null)
-  touch -d '60 days ago' "$standalone"
+  touch -t 200001010000.00 "$standalone"
   rg -q "^ITEM\tSAFE\truntime\t$standalone\t" <<<"$(cd "$repo" && "$xdh" clean scan)"
+}
+
+test_sync_new_canonical_consumer_from_targets_conf() {
+  local project="$TEST_ROOT/new-consumer"
+  local home="$TEST_ROOT/new-consumer-home"
+  copy_project "$project"
+  "$project/bin/build.sh" >/dev/null
+
+  mkdir -p "$home/.my-custom-agent/skills"
+  cat > "$project/bin/targets/targets.conf" <<'EOF'
+# Target registry for bin/build.sh.
+
+CANONICAL_DEST="commands"
+CANONICAL_CONSUMERS=(
+  "claude-code:~/.claude/skills"
+  "codex:~/.codex/skills"
+  "codex-defensive:~/.agents/skills"
+  "opencode-v2:~/.config/opencode/skills"
+  "my-custom-agent:~/.my-custom-agent/skills"
+)
+
+TRANSFORMED_TARGETS=(
+  "opencode-v1-commands:opencode-commands"
+)
+EOF
+
+  HOME="$home" "$project/bin/sync-skills.sh" >/dev/null
+
+  [[ -L "$home/.my-custom-agent/skills/example-skill" ]]
+  link_target=$(readlink "$home/.my-custom-agent/skills/example-skill")
+  expected="$project/commands/example-skill"
+  [[ "$(realpath -- "$link_target")" == "$(realpath -- "$expected")" ]]
+}
+
+test_cloud_v2_bootstrap_removes_managed_shims_preserves_user_files() {
+  local project="$TEST_ROOT/cloud-v2-shims"
+  local remote="$TEST_ROOT/cloud-v2-shims.git"
+  local home="$TEST_ROOT/cloud-v2-shims-home"
+  local commands="$home/.config/opencode/commands"
+  make_git_fixture "$project" "$remote"
+  local ref
+  ref=$(git -C "$project" rev-parse HEAD)
+  mkdir -p "$commands"
+  cp "$project/opencode-commands/example-skill.md" "$commands/example-skill.md"
+  echo 'user owned other' > "$commands/other-command.md"
+
+  HOME="$home" SKILL_X_OPENCODE_VERSION=v2 \
+    "$project/bin/cloud-bootstrap.sh" "file://$remote" "$ref" >/dev/null 2>"$project/cloud-warnings"
+
+  [[ ! -e "$commands/example-skill.md" ]]
+  [[ ! -e "$commands/funny-text-rewriter.md" ]]
+  [[ $(cat "$commands/other-command.md") == 'user owned other' ]]
+  [[ -f "$home/.config/opencode/skills/example-skill/SKILL.md" ]]
+}
+
+# Regression for issue #13: build outputs are disposable gitignored
+# artifacts, so a clean source-only checkout must produce them on demand
+# and must not leave them as tracked changes.
+test_build_outputs_are_gitignored_artifacts() {
+  local project="$TEST_ROOT/source-only"
+  copy_project "$project"
+  git -C "$project" init -q
+  git -C "$project" config user.email test@example.invalid
+  git -C "$project" config user.name 'Test Runner'
+
+  # The .gitignore must list every disposable artifact produced by build.sh.
+  rg -q '^commands/$' "$project/.gitignore"
+  rg -q '^opencode-commands/$' "$project/.gitignore"
+
+  "$project/bin/build.sh" >/dev/null
+  [[ -d "$project/commands" ]]
+  [[ -d "$project/opencode-commands" ]]
+
+  git -C "$project" add .
+  git -C "$project" commit -qm initial
+
+  local status
+  status=$(git -C "$project" status --short -- commands opencode-commands)
+  [[ -z "$status" ]]
+
+  # Editing a source skill must regenerate artifacts but never register
+  # them as tracked modifications.
+  printf '\nchanged body\n' >> "$project/commands-src/example-skill/SKILL.md"
+  "$project/bin/build.sh" >/dev/null
+  [[ -d "$project/commands" ]]
+  status=$(git -C "$project" status --short -- commands opencode-commands)
+  [[ -z "$status" ]]
+}
+
+# Regression for issue #13: a fresh source-only clone installs all
+# supported skills and commands through install.sh alone.
+test_install_from_source_only_checkout() {
+  local project="$TEST_ROOT/source-install"
+  local home="$TEST_ROOT/source-install-home"
+  copy_project "$project"
+  # Strip every artifact so install.sh has to build from scratch.
+  rm -rf "$project/commands" "$project/opencode-commands"
+  git -C "$project" init -q
+  git -C "$project" config user.email test@example.invalid
+  git -C "$project" config user.name 'Test Runner'
+  git -C "$project" add .
+  git -C "$project" commit -qm initial
+  [[ ! -d "$project/commands" ]]
+  [[ ! -d "$project/opencode-commands" ]]
+
+  HOME="$home" "$project/install.sh" >/dev/null
+  for path in \
+    .claude/skills/example-skill \
+    .codex/skills/example-skill \
+    .agents/skills/example-skill \
+    .config/opencode/skills/example-skill \
+    .config/opencode/commands/example-skill.md; do
+    [[ -e "$home/$path" ]]
+  done
+}
+
+# Regression for issue #13: bin/apply-update.sh rebuilds artifacts after a
+# successful fast-forward and before sync, so consumers never observe a
+# stale tree from before the pull.
+test_apply_update_rebuilds_after_pull() {
+  local project="$TEST_ROOT/rebuild-update"
+  local remote="$TEST_ROOT/rebuild-update.git"
+  local author="$TEST_ROOT/rebuild-update-author"
+  local home="$TEST_ROOT/rebuild-update-home"
+  local state="$TEST_ROOT/rebuild-update-state"
+  make_git_fixture "$project" "$remote"
+  git clone -q "$remote" "$author"
+  git -C "$author" config user.email test@example.invalid
+  git -C "$author" config user.name 'Test Runner'
+
+  # Author adds a brand new skill on a remote branch that hasn't been
+  # built locally yet, then pushes it.
+  mkdir -p "$author/commands-src/remote-skill"
+  cat > "$author/commands-src/remote-skill/SKILL.md" <<'EOF'
+---
+name: remote-skill
+description: fixture
+---
+
+body
+EOF
+  git -C "$author" add commands-src/remote-skill
+  git -C "$author" commit -qm add-remote-skill
+  git -C "$author" push -q
+
+  # Sanity: local project only has commands-src/, no artifact tree.
+  [[ ! -d "$project/commands/remote-skill" ]]
+
+  mkdir -p "$state"
+  : > "$state/last-check"
+
+  HOME="$home" SKILL_X_STATE_DIR="$state" \
+    "$project/bin/apply-update.sh" >/dev/null
+
+  # The new skill must be present in the artifact tree and symlinked
+  # into every canonical consumer, because the rebuild happened.
+  [[ -f "$project/commands/remote-skill/SKILL.md" ]]
+  [[ -f "$project/opencode-commands/remote-skill.md" ]]
+  [[ -L "$home/.claude/skills/remote-skill" ]]
+  [[ -L "$home/.codex/skills/remote-skill" ]]
+  [[ -L "$home/.agents/skills/remote-skill" ]]
+  [[ -L "$home/.config/opencode/skills/remote-skill" ]]
+  [[ -L "$home/.config/opencode/commands/remote-skill.md" ]]
+}
+
+# Regression for issue #13: a pinned ref that contains only canonical
+# source plus build inputs must still produce a complete install, because
+# cloud-bootstrap.sh builds before copying.
+test_cloud_bootstrap_uses_source_only_ref() {
+  local project="$TEST_ROOT/source-only-ref"
+  local remote="$TEST_ROOT/source-only-ref.git"
+  local home="$TEST_ROOT/source-only-ref-home"
+  local bare="$TEST_ROOT/source-only-ref-bare.git"
+  copy_project "$project"
+  # Push a ref that has never been built: only source files are tracked.
+  git init -q --bare "$bare"
+  git -C "$project" init -q
+  git -C "$project" config user.email test@example.invalid
+  git -C "$project" config user.name 'Test Runner'
+  git -C "$project" add .
+  git -C "$project" commit -qm initial
+  [[ ! -d "$project/commands" ]]
+  [[ ! -d "$project/opencode-commands" ]]
+  git -C "$project" remote add origin "$bare"
+  git -C "$project" push -qu origin HEAD
+  local ref
+  ref=$(git -C "$project" rev-parse HEAD)
+
+  HOME="$home" SKILL_X_OPENCODE_VERSION=v1 \
+    "$project/bin/cloud-bootstrap.sh" "file://$bare" "$ref" >/dev/null
+  for path in \
+    .claude/skills/example-skill \
+    .codex/skills/example-skill \
+    .agents/skills/example-skill \
+    .config/opencode/skills/example-skill \
+    .config/opencode/commands/example-skill.md; do
+    [[ -e "$home/$path" ]]
+  done
+  # Pinned installs copy artifacts rather than symlink them.
+  [[ ! -L "$home/.claude/skills/example-skill" ]]
 }
 
 run_test 'build injects once and copies support files' test_build_injects_header_and_support_files
@@ -936,6 +1147,10 @@ run_test 'sync removes links for deleted skills' test_sync_removes_links_for_del
 run_test 'sync installs opencode v1 commands without clobbering' test_sync_installs_opencode_v1_commands
 run_test 'sync removes stale opencode commands' test_sync_removes_stale_opencode_commands
 run_test 'opencode v2 sync removes generated commands' test_sync_v2_removes_generated_commands
+run_test 'build outputs are gitignored disposable artifacts' test_build_outputs_are_gitignored_artifacts
+run_test 'install from source-only checkout succeeds' test_install_from_source_only_checkout
+run_test 'apply update rebuilds after pull' test_apply_update_rebuilds_after_pull
+run_test 'cloud bootstrap builds source-only pinned ref' test_cloud_bootstrap_uses_source_only_ref
 run_test 'update check reports current, upgrade, and snooze states' test_update_check_states
 run_test 'update check fails open without a remote' test_update_check_fails_open_without_remote
 run_test 'apply update fast-forwards and resynchronizes' test_apply_update_fast_forwards_and_resyncs
@@ -956,6 +1171,8 @@ run_test 'xdh keeps temporary files inside the project' test_xdh_keeps_every_tem
 run_test 'xdh cleanup survives a path containing spaces' test_xdh_cleanup_survives_a_path_containing_spaces
 run_test 'xdh standalone planning is reusable' test_xdh_standalone_planning_is_reusable
 run_test 'xdh housekeeping spares runtime holding live work' test_xdh_housekeeping_spares_runtime_holding_live_work
+run_test 'new canonical consumer from targets.conf is synced locally' test_sync_new_canonical_consumer_from_targets_conf
+run_test 'cloud v2 bootstrap removes managed shims preserves user files' test_cloud_v2_bootstrap_removes_managed_shims_preserves_user_files
 
 printf '\nRESULT: %d passed, %d failed\n' "$passed" "$failed"
 (( failed == 0 ))

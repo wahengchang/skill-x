@@ -2,15 +2,16 @@
 
 ## 目標與資料流
 
-本專案是個人指令集框架。private Git repository 是唯一來源：作者編輯 `commands-src/`，`bin/build.sh` 注入共用更新指示並產生已 commit 的 `commands/`。互動式個人電腦把部署版本 symlink 到各工具；不可變 image 在 build 階段複製指定 ref 的部署版本。
+本專案是個人指令集框架。private Git repository 的唯一受版本控制內容是 **canonical source 與 build 設定**：`commands-src/<name>/SKILL.md`、`_shared/update-check-header.md`、與 `bin/`。`bin/build.sh` 從這些來源產出 disposable artifact tree（`commands/`、`opencode-commands/`），並由各安裝 / 同步腳本部署到對應工具。互動式個人電腦把部署版本 symlink 到各工具；不可變 image 在 build 階段複製指定 ref 的部署版本。
 
 ```text
-commands-src ── build.sh ──> commands (committed)
-                     │          ├─ sync-skills.sh ─> local symlinks
-                     │          └─ cloud-bootstrap ─> pinned image copies
-                     └──────> opencode-commands (committed, OpenCode v1 shims)
-                                ├─ sync-skills.sh ─> ~/.config/opencode/commands
-                                └─ cloud-bootstrap ─> pinned image copies
+commands-src/ ───┐
+_shared/      ───┼── bin/build.sh ──> commands/         (gitignored artifact)
+bin/targets/  ───┘          │      └─> opencode-commands/ (gitignored artifact)
+                              │
+                              ├─ install.sh          ──> bin/build.sh + bin/sync-skills.sh
+                              ├─ bin/apply-update.sh ──> git pull --ff-only + build + sync
+                              └─ bin/cloud-bootstrap ──> clone pinned ref + build + cp
 ```
 
 ## 詞彙表
@@ -20,8 +21,11 @@ commands-src ── build.sh ──> commands (committed)
 | **raw skill** | 從其他專案、零散草稿或一句描述取得，尚未格式化也尚未信任的技能素材。 |
 | **canonicalize**（動詞） | 把 raw skill 釐清並整理成本專案標準格式的動作。 |
 | **canonical skill** | canonicalize 的結果；位於 `commands-src/<name>/SKILL.md`，是技能內容的單一來源。 |
-| **sync / distribute** | 既有 `bin/build.sh` 與 `bin/sync-skills.sh` 負責的建置及分發流程。目前三個目標工具皆讀取 `SKILL.md`，不需要格式轉換。 |
-| **generated skill** | 產生於 `commands/<name>/SKILL.md`、再 symlink 到各工具的部署副本。 |
+| **build input** | 受版本控制的來源：`commands-src/`、`_shared/`、與 `bin/`（包含 `bin/targets/`）。 |
+| **generated artifact** | `bin/build.sh` 產生的 disposable artifact tree，列在 `.gitignore`。`commands/`、`opencode-commands/`，以及未來任何新增的 transform 產物。 |
+| **canonical-format consumer** | 直接讀取 `commands/<name>/SKILL.md` 不需轉換的 runtime；由 `CANONICAL_CONSUMERS` 描述。 |
+| **transform adapter** | 把 common build 完成後的 canonical artifact 轉成另一個 runtime 需要的 wire format 的腳本，位於 `bin/targets/<adapter>.sh`。 |
+| **sync / distribute** | `bin/sync-skills.sh` 與 `bin/cloud-bootstrap.sh` 負責把 build 出的 artifact 部署到目標路徑；它們不是 build pipeline 的一部分。 |
 | **command shim** | 產生於 `opencode-commands/<name>.md` 的薄層 command 檔，只為 OpenCode v1 補上 `/<name>`；它叫 OpenCode 用 `skill` 工具載入 canonical skill，不含技能內容。 |
 
 raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 產生 canonical skill，之後才進入既有 build 與 sync 流程。canonicalizer 是 framework 的開發工具，不是 canonical skill set 的成員，因此不會建置到 `commands/` 或分發給各 AI agents。v1 不做近似重複的自動偵測；來源專案或原始 prompt 也不強制寫入，以免為單人維護增加不必要的 metadata。
@@ -33,18 +37,34 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 3. **自建分發**：不使用單一工具的 marketplace，以一致的 update-check、詢問與 symlink 流程換取跨工具一致體驗。
 4. **按需檢查**：技能呼叫時檢查，預設一小時節流，不執行 daemon。
 5. **更新需同意**：個人電腦永不靜默更新；拒絕後預設延後七天。
-6. **不可變 image**：build 時由使用者自己的 CI/建置環境提供 private repo 認證，固定 ref 並複製檔案；runtime 不依賴 Git。
-7. **作者版與部署版都入庫**：其他機器 pull 後不必具備 build 工具鏈即可同步。
+6. **不可變 image**：build 時由使用者自己的 CI/建置環境提供 private repo 認證，固定 ref 並複製檔案；runtime 不依賴 Git。pinned ref 不需要夾帶 artifact，bootstrap 會就地 build。
+7. **build input 入庫，artifact 為 disposable**：個人 clone 或 image build 不必預先夾帶 `commands/` 或 `opencode-commands/`；一律從 source 重新生成。
 8. **雙版本節奏**：個人電腦 rolling，image pinned。
 9. **叫用管道按工具補齊**：Claude Code 與 Codex 從 skills 目錄自動產生 `/<skill>` 與 `$<skill>`，OpenCode v2 也有原生 slash 目錄，只有 OpenCode v1 需要額外的 command 檔案。因此只為 v1 產生 shim，其餘工具不產生任何重複項目，也不安裝 Codex 已棄用的 custom prompts。
 10. **共用支援檔以 symlink 收斂、以複製部署**：一組技能若共用同一份腳本，作者版只保留一份（`commands-src/_x-shared/`），各技能以 symlink 指過去；`bin/build.sh` 用 `find -L` 與 `cp -aL` 解引用，讓 `commands/<name>/` 得到真實副本。這是必要的：技能是各自 symlink 進 `~/.claude/skills/<name>` 的，執行期無法保證讀得到兄弟技能的檔案，所以部署版必須自給自足。決策 #2（內容不分支）仍然成立——收斂的是**來源**，不是內容。
 11. **開發週期狀態一律 project-local**：`x-*` 技能組的所有執行期狀態放在 repo 內的 `.dev-hub/`，不使用 `~/.x-*` 或系統 `/tmp`。`active/`、`worktrees/`、`runtime/` 由 `xdh` 自動加進 `.gitignore`；只有 `logs/` 進 Git。理由是可稽核與可丟棄：一個 Cycle 的全部痕跡都能用一般 Git 指令檢視或清掉，換機器也不會帶著看不見的全域狀態。
+12. **target 擴充走 metadata + adapter**：加新 runtime 時，讀 canonical `SKILL.md` 的加進 `CANONICAL_CONSUMERS`、需要不同表示的加 adapter 腳本並登記到 `TRANSFORMED_TARGETS`。build pipeline 不需要改。
 
 ## 核心機制
 
 ### Build
 
-`bin/build.sh` 要求 `SKILL.md` 第一行為 `---`，在第二個 `---` 後插入 `_shared/update-check-header.md`，並原樣複製其他支援檔。同時為每顆技能產生 `opencode-commands/<name>.md` shim，`description` 取自 canonical frontmatter。它先在暫存目錄完成全部輸出，再一次替換 `commands/` 與 `opencode-commands/`，避免半成品。
+`bin/build.sh` 從 `bin/targets/targets.conf` 讀取 canonical 目的地與 target 註冊資料，並驗證所有 adapter 腳本都已宣告（反之亦然）。接著：
+
+1. **Common canonical build**：掃描 `commands-src/`，對每顆技能的 `SKILL.md` 注入 `_shared/update-check-header.md`、保留 support 檔，輸出到 `$CANONICAL_DEST`（預設 `commands/`）的 staging tree。
+2. **Transform adapters**：依序執行 `bin/targets/<adapter>.sh build "$canonical_tmp" "$staging"`；adapter 收到的是 common build 完成後的 canonical staging artifact，而不是 raw `commands-src/`，因此 header injection 與 support-file materialization 只維護一份。adapter 再把 canonical artifact 轉成該 runtime 需要的表示（例如 OpenCode v1 的 command shim），輸出到自己的 artifact 目錄。
+
+adapter 的 action contract 固定為：`build <canonical-staging-dir> <artifact-staging-dir>`、`sync <artifact-dir>`、`bootstrap <artifact-dir>`。所有輸出都先寫到 `mktemp` 暫存樹，全部建置成功後才逐棵以 `mv` 替換最終 artifact 目錄，所以消費者不會看到任一目錄的半成品。生成的 `commands/`、`opencode-commands/`，以及未來任何 transform artifact，都列在 `.gitignore`，正常 commit 不會把它們送進 repository。
+
+### Target metadata
+
+`bin/targets/targets.conf` 是 build 與 bootstrap 之間的合約：
+
+- `CANONICAL_DEST`：canonical artifact 目錄（目前 `commands`）；build、sync 與 bootstrap 都必須從這個值取得 canonical tree，不得另外 hardcode `commands/`。
+- `CANONICAL_CONSUMERS`：直接讀 SKILL.md 的 runtime 與其部署路徑，例如 `claude-code:~/.claude/skills`。bootstrap 用這份清單決定要把 canonical artifact 拷貝到哪裡。
+- `TRANSFORMED_TARGETS`：需要 adapter 的 target，格式 `<adapter-script-stem>:<artifact-directory-under-repo-root>`。bootstrap 看到這份清單才把 transform 產物拷貝給有需要的 runtime。
+
+加新 runtime 時，視需要只動這個檔，build pipeline 不必改。
 
 ### 明確叫用（command shim）
 
@@ -86,35 +106,38 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 - `UPGRADE_AVAILABLE <local_sha> <remote_sha>`
 - 無輸出（無法檢查）
 
-共用 header 指示 AI 發現更新時先詢問；同意後 `git pull --ff-only` 並重建 symlink，拒絕則寫入七天後的 snooze timestamp。狀態位於 `~/.skill-x-starter-state/`。
+共用 header 指示 AI 發現更新時先詢問；同意後 `bin/apply-update.sh` 會 `git pull --ff-only`、重跑 `bin/build.sh`、再 `bin/sync-skills.sh`，拒絕則寫入七天後的 snooze timestamp。狀態位於 `~/.skill-x-starter-state/`。
 
 ### 同步路徑
 
-`bin/sync-skills.sh` 防禦性同步四個個人層級路徑：Claude、OpenCode、`~/.codex/skills` 與 `~/.agents/skills`，並在 OpenCode v1 時額外同步 `~/.config/opencode/commands`。遇到同名非 symlink 內容只警告而不覆蓋。之所以暫時保留兩個 Codex 路徑，是官方文件查詢在本次建置環境因 DNS/網路限制失敗，尚無法可靠裁決；應在真實 Codex CLI 跑 `bin/doctor.sh` 的步驟後回填並簡化。
+`bin/sync-skills.sh` sources `targets.conf` to derive `$CANONICAL_DEST` and canonical consumer destinations from `CANONICAL_CONSUMERS`, then invokes each transform adapter's `sync` action. Transform adapters (e.g., `opencode-v1-commands`) handle OpenCode v1/v2 shim lifecycle: v1 installs symlinks to command shims, v2 removes managed shims while preserving user-owned command files.遇到同名非 symlink 內容只警告而不覆寫。
 
 ### 容器部署
 
-`bin/cloud-bootstrap.sh` 接受 repo URL 與 ref，在暫存 checkout 中取得該版本的 `commands/`，複製到四個目標。認證由 image builder 的 SSH agent/secret 負責，避免 token 進入參數、log 或 image layer。部署後只有技能副本，沒有 repository 腳本，因此嵌入的本地更新檢查自然無法執行且必須靜默繼續。
+`bin/cloud-bootstrap.sh` 接受 repo URL 與 ref，先 clone 到暫存目錄、checkout 指定 ref、**就地跑該 ref 的 `bin/build.sh`** 產出 artifact。新版 ref 會照 `CANONICAL_CONSUMERS` 把 canonical artifact 拷貝到各目標，再由 transform adapter 的 `bootstrap` action 決定 transform 產物；若 pinned ref 早於 target registry、沒有 `bin/targets/targets.conf`，則自動回退到歷史 `commands/` + `opencode-commands/` layout，保持舊 pin 可重建。認證由 image builder 的 SSH agent/secret 負責，避免 token 進入參數、log 或 image layer。部署後只有技能副本，沒有 repository 腳本，因此嵌入的本地更新檢查自然無法執行且必須靜默繼續。
 
 ## 目錄
 
 ```text
-commands-src/                  手動編輯的作者版
+commands-src/                  手動編輯的作者版（build input）
 commands-src/_x-shared/        x-* 技能組共用的 xdh 腳本與 Markdown 樣板（各技能以 symlink 引用）
-commands/                      build 產生、需 commit 的部署版
-opencode-commands/             build 產生、需 commit 的 OpenCode v1 command shim
-.codex/skills/canonicalize-skill/ Codex 建置環境專用的 raw skill authoring tool（不分發）
-_shared/update-check-header.md 共用更新與詢問指示
-bin/build.sh                   產生部署版
+_shared/update-check-header.md 共用更新與詢問指示（build input）
+bin/build.sh                   產生 disposable artifact tree
+bin/targets/targets.conf       canonical 目的地與 target 註冊資料
+bin/targets/<adapter>.sh       各 transform adapter
 bin/update-check               節流遠端檢查
-bin/apply-update.sh            fast-forward 更新與重新同步
+bin/apply-update.sh            fast-forward 更新、build 與重新同步
 bin/snooze.sh                  延後提醒
 bin/sync-skills.sh             個人電腦 symlink
 bin/opencode-version.sh        OpenCode v1/v2 判定與覆寫
-bin/cloud-bootstrap.sh         image 固定版本複製
+bin/cloud-bootstrap.sh         image 固定版本複製（含就地 build）
 bin/doctor.sh                  目標路徑診斷
-install.sh                     安裝入口
+commands/                      build 產生的 canonical artifact（.gitignore）
+opencode-commands/             build 產生的 OpenCode v1 command shim（.gitignore）
+.codex/skills/canonicalize-skill/ Codex 建置環境專用的 raw skill authoring tool（不分發）
+install.sh                     安裝入口（build 再 sync）
 tests/run.sh                   不需網路的整合測試
+tests/pr15-regression.sh       target contract 與 legacy pinned-ref regression tests
 ```
 
 ## 已知限制與優先驗證
@@ -140,8 +163,8 @@ tests/run.sh                   不需網路的整合測試
 
 ## 維護規則
 
-- 只改 `commands-src/` 或 `_shared/`，隨後執行 `bin/build.sh` 並一併 commit `commands/`。
+- 只改 `commands-src/`、`_shared/`、`bin/`；隨後執行 `bin/build.sh`，不需 commit `commands/` 或 `opencode-commands/`（它們在 `.gitignore`）。
 - 新機器：clone 後執行 `./install.sh`。
-- 個人機器手動更新：`git pull --ff-only && bin/sync-skills.sh`。
+- 個人機器手動更新：`git pull --ff-only && bin/apply-update.sh`（套件自己會跑 build + sync）。
 - image 升級：更新 pinned ref 並重建，不在 runtime pull。
 - 每次修改腳本後執行 `make test`；測試使用暫存 HOME 與本機 bare Git remote，不會接觸使用者的真實技能目錄或遠端 repository。

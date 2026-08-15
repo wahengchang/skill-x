@@ -3,93 +3,125 @@ set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 SRC="$ROOT/commands-src"
-DEST="$ROOT/commands"
-COMMAND_DEST="$ROOT/opencode-commands"
 HEADER="$ROOT/_shared/update-check-header.md"
-MANAGED_MARKER="skill-x-managed-command"
+TARGETS_DIR="$ROOT/bin/targets"
+TARGETS_CONF="$TARGETS_DIR/targets.conf"
 
 [[ -f "$HEADER" ]] || { echo "Missing header: $HEADER" >&2; exit 1; }
+[[ -f "$TARGETS_CONF" ]] || { echo "Missing target registry: $TARGETS_CONF" >&2; exit 1; }
+
+# shellcheck source=targets/targets.conf
+source "$TARGETS_CONF"
+
+# Verify that every adapter script on disk is declared in
+# TRANSFORMED_TARGETS, and that every declared adapter exists on disk.
+# Catches drift between bin/targets/*.sh and the registry before any
+# files are written.
+declared_adapters=()
+for entry in "${TRANSFORMED_TARGETS[@]}"; do
+  declared_adapters+=("${entry%%:*}")
+done
+for script in "$TARGETS_DIR"/*.sh; do
+  [[ -f "$script" ]] || continue
+  stem=$(basename "$script" .sh)
+  found=0
+  for adapter in "${declared_adapters[@]}"; do
+    [[ "$adapter" == "$stem" ]] && { found=1; break; }
+  done
+  (( found )) || {
+    echo "Undeclared adapter script: bin/targets/${stem}.sh (add it to bin/targets/targets.conf)" >&2
+    exit 1
+  }
+done
+
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/skill-x-build.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/commands" "$tmp/opencode-commands"
 
-# The shim is deliberately thin: it points OpenCode v1 at the canonical skill
-# instead of restating it, so commands-src/ stays the single source of truth.
-write_opencode_command() {
-  local name=$1 description=$2 out=$3
-  local quoted=${description//\'/\'\'}
-  cat > "$out" <<EOF
----
-description: '$quoted'
----
+# Stage every artifact under $tmp. The final swap is a pure directory mv,
+# so downstream consumers never observe a half-built tree. We keep two
+# parallel arrays (adapter -> artifact) instead of an associative array
+# so the script stays portable with bash 3.2.
+canonical_tmp="$tmp/$CANONICAL_DEST"
+mkdir -p "$canonical_tmp"
 
-<!-- $MANAGED_MARKER: $name -->
-<!-- 由 bin/build.sh 產生，請改 commands-src/$name/SKILL.md 後重新 build。 -->
+staged_paths=()
+final_paths=()
+staged_paths+=("$canonical_tmp"); final_paths+=("$ROOT/$CANONICAL_DEST")
+for entry in "${TRANSFORMED_TARGETS[@]}"; do
+  artifact=${entry##*:}
+  staged="$tmp/$artifact"
+  mkdir -p "$staged"
+  staged_paths+=("$staged"); final_paths+=("$ROOT/$artifact")
+done
 
-Use the \`skill\` tool to load the \`$name\` skill, then follow its instructions exactly.
-The skill itself is the single source of truth; do not act on any summary of it.
+build_canonical_skills() {
+  local found=0
+  while IFS= read -r -d '' skill; do
+    found=1
+    rel=${skill#"$SRC/"}
+    name=${rel%/SKILL.md}
+    out="$canonical_tmp/$name/SKILL.md"
+    mkdir -p "$(dirname "$out")"
+    awk -v header="$HEADER" '
+      { sub(/\r$/, "") }
+      NR == 1 && $0 != "---" { exit 42 }
+      { print }
+      NR > 1 && $0 == "---" && !done {
+        print ""
+        while ((getline line < header) > 0) { sub(/\r$/, "", line); print line }
+        close(header)
+        done=1
+        next
+      }
+      END { if (!done) exit 43 }
+    ' "$skill" > "$out" || {
+      status=$?
+      echo "Invalid frontmatter in ${rel}: expected opening and closing ---" >&2
+      exit "$status"
+    }
 
-Arguments from the user: \$ARGUMENTS
+    skill_dir=$(dirname "$skill")
+    out_dir=$(dirname "$out")
+    # Follow shared support-file symlinks so each generated skill is a
+    # self-contained artifact even when canonical sources share assets.
+    while IFS= read -r -d '' support; do
+      support_rel=${support#"$skill_dir/"}
+      mkdir -p "$out_dir/$(dirname "$support_rel")"
+      cp -aL "$support" "$out_dir/$support_rel"
+    done < <(find -L "$skill_dir" -type f ! -name SKILL.md -print0)
+  done < <(find "$SRC" -mindepth 2 -maxdepth 2 -type f -name SKILL.md -print0 | sort -z)
 
-If those arguments are empty, ask the user what they want the skill to work on before continuing.
-EOF
+  (( found )) || { echo "No skills found in $SRC" >&2; exit 1; }
 }
 
-found=0
-while IFS= read -r -d '' skill; do
-  found=1
-  rel=${skill#"$SRC/"}
-  name=${rel%/SKILL.md}
-  out="$tmp/commands/$name/SKILL.md"
-  mkdir -p "$(dirname "$out")"
-  awk -v header="$HEADER" '
-    { sub(/\r$/, "") }
-    NR == 1 && $0 != "---" { exit 42 }
-    { print }
-    NR > 1 && $0 == "---" && !done {
-      print ""
-      while ((getline line < header) > 0) { sub(/\r$/, "", line); print line }
-      close(header)
-      done=1
-      next
-    }
-    END { if (!done) exit 43 }
-  ' "$skill" > "$out" || {
-    status=$?
-    echo "Invalid frontmatter in ${rel}: expected opening and closing ---" >&2
-    exit "$status"
+build_canonical_skills
+
+idx=0
+for entry in "${TRANSFORMED_TARGETS[@]}"; do
+  adapter=${entry%%:*}
+  artifact=${entry##*:}
+  script="$TARGETS_DIR/${adapter}.sh"
+  echo "Building transformed target: $adapter -> ${artifact}/"
+  # Transform adapters consume the fully processed canonical staging tree,
+  # not raw commands-src/. That keeps shared header injection and support-file
+  # materialization centralized in the common build path.
+  "$script" build "$canonical_tmp" "${staged_paths[$((idx + 1))]}" || {
+    echo "Target $adapter failed" >&2
+    exit 1
   }
-  description=$(awk '
-    { sub(/\r$/, "") }
-    NR == 1 { next }
-    $0 == "---" { exit }
-    /^description:[[:space:]]*/ {
-      sub(/^description:[[:space:]]*/, "")
-      sub(/^"/, ""); sub(/"$/, "")
-      sub(/^'"'"'/, ""); sub(/'"'"'$/, "")
-      print
-      exit
-    }
-  ' "$skill")
-  [[ -n "$description" ]] || description="Run the $name skill."
-  write_opencode_command "$name" "$description" "$tmp/opencode-commands/$name.md"
+  idx=$((idx + 1))
+done
 
-  skill_dir=$(dirname "$skill")
-  out_dir=$(dirname "$out")
-  # -L follows symlinked support directories, so a set of skills can share one
-  # source copy of its scripts/templates (commands-src/_x-shared/) while every
-  # deployed skill still ships a self-contained, real copy — a skill is synced
-  # to ~/.claude/skills/<name> on its own and cannot reach a sibling.
-  while IFS= read -r -d '' support; do
-    support_rel=${support#"$skill_dir/"}
-    mkdir -p "$out_dir/$(dirname "$support_rel")"
-    cp -aL "$support" "$out_dir/$support_rel"
-  done < <(find -L "$skill_dir" -type f ! -name SKILL.md -print0)
-done < <(find "$SRC" -mindepth 2 -maxdepth 2 -type f -name SKILL.md -print0 | sort -z)
+# Each fully staged tree is moved into its final, gitignored location in one
+# shot, so consumers never see a half-written artifact directory.
+swap_tree() {
+  local staged=$1 final=$2 label=$3
+  rm -rf "$final"
+  mv "$staged" "$final"
+  echo "Built ${label} in $final"
+}
 
-(( found )) || { echo "No skills found in $SRC" >&2; exit 1; }
-rm -rf "$DEST" "$COMMAND_DEST"
-mv "$tmp/commands" "$DEST"
-mv "$tmp/opencode-commands" "$COMMAND_DEST"
-echo "Built skills in $DEST"
-echo "Built OpenCode v1 command shims in $COMMAND_DEST"
+for i in "${!staged_paths[@]}"; do
+  label=$(basename "${final_paths[$i]}")
+  swap_tree "${staged_paths[$i]}" "${final_paths[$i]}" "$label"
+done

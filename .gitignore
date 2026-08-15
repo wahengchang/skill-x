@@ -1,0 +1,8 @@
+# Build artifacts - generated from commands-src/
+commands/
+opencode-commands/
+
+# Editor and system files
+*.swp
+*.swo
+.DS_Store
