@@ -49,7 +49,7 @@ OpenCode v1 的 shim 是薄薄一層：它只叫 OpenCode 用 `skill` 工具載�
 請使用 canonicalize-skill：當我要求整理每週工作紀錄時，產生一份依專案分組的週報。
 ```
 
-canonical skill 的唯一來源仍是 `commands-src/<name>/`；不要直接編輯產生的 `commands/`。建立或修改完成後執行 `bin/build.sh`，並將 source 與 generated skill 一起 commit。若要手動撰寫或查看完整命名規則，請參考 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+canonical skill 的唯一來源仍是 `commands-src/<name>/`；不要直接編輯產生的 `commands/`、`opencode-commands/`，也不要把這些 disposable artifact commit 進 repository（它們在 `.gitignore`）。建立或修改完成後執行 `bin/build.sh`，只需要 commit source 與 build 設定。若要手動撰寫或查看完整命名規則，請參考 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 `canonicalize-skill` 是建置階段的 authoring tool，不是此 framework 的輸出；它不會進入 `commands/`，也不會由 `bin/sync-skills.sh` 分發到各 AI agents。framework 的輸入是 `commands-src/` 中完成 canonicalize 的 skill set，輸出才是跨 agents 使用的 generated skill set。
 
@@ -118,7 +118,7 @@ bin/doctor.sh                       # 確認技能已同步
 bin/cloud-bootstrap.sh <private-repo-url> <tag-or-commit>
 ```
 
-腳本會 checkout 指定 ref，再把技能複製到目標路徑；runtime 不需保留 Git checkout。private repo 的 SSH agent、deploy key 或 BuildKit secret 應由你自己的建置環境提供，腳本不接收憑證。升級時改 ref 並重建 image。
+腳本會 checkout 指定 ref，**就地跑 `bin/build.sh` 產出 disposable artifact**，再把 canonical skill 複製到四個目標，最後視 OpenCode 版本決定要不要安裝 command shim。pinned ref 不需要夾帶 `commands/` 或 `opencode-commands/`——它們每次都從 source 重新產生。private repo 的 SSH agent、deploy key 或 BuildKit secret 應由你自己的建置環境提供，腳本不接收憑證。升級時改 ref 並重建 image。
 
 > 請使用不可變的 tag 或完整 commit SHA。一般 branch 名稱雖可被 Git 解析，並不符合可重現建置的目的。
 
@@ -130,7 +130,7 @@ bin/cloud-bootstrap.sh <private-repo-url> <tag-or-commit>
 make test
 ```
 
-測試結束時應顯示 `RESULT: 30 passed, 0 failed`。這能驗證 shell 腳本與檔案行為；Claude Code、Codex CLI、OpenCode 是否實際發現技能，以及 AI 是否依照自然語言指示詢問，仍需分別在三個工具做端到端人工 smoke test：
+測試結束時應顯示 `RESULT: 36 passed, 0 failed`。這能驗證 shell 腳本與檔案行為；Claude Code、Codex CLI、OpenCode 是否實際發現技能，以及 AI 是否依照自然語言指示詢問，仍需分別在三個工具做端到端人工 smoke test：
 
 1. 執行 `./install.sh` 與 `bin/doctor.sh`，確認四個技能路徑與 OpenCode command 區段皆為 `OK`。
 2. 重新啟動三個工具（skills 與 commands 在啟動時載入）。
