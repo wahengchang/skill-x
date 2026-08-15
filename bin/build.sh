@@ -102,7 +102,10 @@ for entry in "${TRANSFORMED_TARGETS[@]}"; do
   artifact=${entry##*:}
   script="$TARGETS_DIR/${adapter}.sh"
   echo "Building transformed target: $adapter -> ${artifact}/"
-  "$script" build "$SRC" "${staged_paths[$((idx + 1))]}" || {
+  # Transform adapters consume the fully processed canonical staging tree,
+  # not raw commands-src/. That keeps shared header injection and support-file
+  # materialization centralized in the common build path.
+  "$script" build "$canonical_tmp" "${staged_paths[$((idx + 1))]}" || {
     echo "Target $adapter failed" >&2
     exit 1
   }
