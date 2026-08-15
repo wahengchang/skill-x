@@ -4,6 +4,31 @@ skill-x 是一套參考 Garry Tan 的 gstack 產品形態打造的個人 skill �
 
 內建的 `x-discovery`、`x-plan-eng`、`x-review`、`x-debug`、`x-ship` 與 `x-housekeeping` 六顆技能，串起設計 → 開發 → ship 的 handover 週期，讓各階段的工作脈絡能持續交接。
 
+### 一眼看懂工作週期
+
+```text
+┌────────────── 設計 ──────────────┐   ┌────────────── 開發 ──────────────┐   ┌────────────── Ship ──────────────┐
+│                                  │   │                                  │   │                                  │
+│  x-discovery ───▶ x-plan-eng    ├──▶│  x-debug ◀──────▶ x-review      ├──▶│  x-ship ───▶ x-housekeeping      │
+│  釐清問題           拆解計畫      │   │  修正問題            驗證成果     │   │  交付成果       收尾並準備下一輪   │
+└──────────────────────────────────┘   └──────────────────────────────────┘   └───────────────────┬──────────────┘
+           ▲                                                                               │
+           └────────────────────────────── 下一個 handover 週期 ────────────────────────────┘
+```
+
+### 一份 skill set，三個工具
+
+```text
+                         Git repository（唯一來源）
+                                     │
+                               bin/skill-x
+                      ├── install ─┐
+                      ├── update ──┴── build / sync ──┬──▶ Claude Code
+                      │                               ├──▶ Codex
+                      │                               └──▶ OpenCode
+                      └── uninstall ── 移除受管理的部署項目
+```
+
 ## 五分鐘快速上手
 
 ```bash
