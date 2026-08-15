@@ -2,15 +2,16 @@
 set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-SOURCE="$ROOT/commands"
 TARGETS_CONF="$ROOT/bin/targets/targets.conf"
 TARGETS_DIR="$ROOT/bin/targets"
 
 [[ -f "$TARGETS_CONF" ]] || { echo "Missing target registry: $TARGETS_CONF" >&2; exit 1; }
-[[ -d "$SOURCE" ]] || { echo "Run bin/build.sh first." >&2; exit 1; }
 
 # shellcheck source=bin/targets/targets.conf
 source "$TARGETS_CONF"
+
+SOURCE="$ROOT/$CANONICAL_DEST"
+[[ -d "$SOURCE" ]] || { echo "Run bin/build.sh first." >&2; exit 1; }
 
 canonical_sync() {
   for entry in "${CANONICAL_CONSUMERS[@]}"; do
