@@ -1,7 +1,22 @@
 # shellcheck shell=bash
 # Cycle lifecycle: create, resolve, allocate IDs, materialise work items, close.
 
+# Terminal states differ by document kind: a work item is finished when it is
+# done/cancelled/deferred, a Work Group when its delivery landed or was closed.
+# Both the Cycle closure gate and the housekeeping sweep ask this one question,
+# so the two lists live here rather than being restated at each call site.
 X_TERMINAL_STATUSES="done cancelled deferred"
+X_TERMINAL_WG_STATUSES="merged closed cancelled done"
+
+x_status_is_terminal() {
+  local kind=$1 status
+  status=$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')
+  [[ -n $status ]] || return 1
+  case $kind in
+    WG) [[ " $X_TERMINAL_WG_STATUSES " == *" $status "* ]] ;;
+    *) [[ " $X_TERMINAL_STATUSES " == *" $status "* ]] ;;
+  esac
+}
 
 x_cycle_dir_for_slug() {
   local slug=$1 dir
@@ -45,6 +60,52 @@ x_cycle_resolve() {
     1) printf '%s' "${dirs[0]}" ;;
     *) x_die "multiple active cycles; pass --cycle <name>" ;;
   esac
+}
+
+# Where planning documents live when there is no Cycle. The path is fixed, not
+# timestamped: a scope that moves every invocation can never be scanned for
+# reuse, and a lock taken inside it protects nothing, so standalone planning
+# would silently lose both idempotency and mutual exclusion.
+x_standalone_dir() {
+  x_ensure_dev_hub
+  x_ensure_gitignore >/dev/null
+  local dir="$X_RUNTIME/standalone"
+  mkdir -p "$dir"
+  printf '%s' "$dir"
+}
+
+# Single scope-resolution rule for every document-creating command.
+# --dir wins; then a named Cycle; then the only active Cycle; then standalone.
+# Several active Cycles stay an error — a fallback must never turn ambiguity
+# into a silent guess.
+x_scope_dir_for() {
+  local cycle=${1:-} dir=${2:-}
+  if [[ -n $dir ]]; then
+    printf '%s' "$dir"
+    return 0
+  fi
+  if [[ -n $cycle ]]; then
+    x_cycle_resolve "$cycle"
+    return 0
+  fi
+  x_resolve_paths
+  local dirs=() d
+  for d in "$X_ACTIVE"/cycle-*; do
+    if [[ -d $d ]]; then dirs+=("$d"); fi
+  done
+  case ${#dirs[@]} in
+    0) x_standalone_dir ;;
+    1) printf '%s' "${dirs[0]}" ;;
+    *) x_die "multiple active cycles; pass --cycle <name>" ;;
+  esac
+}
+
+# True when the resolved scope is the standalone directory rather than a Cycle,
+# which decides whether documents go into work-items/ and work-groups/
+# subdirectories or sit directly in the scope.
+x_scope_is_cycle() {
+  x_resolve_paths
+  [[ $1 == "$X_ACTIVE"/* ]]
 }
 
 x_cycle_stamp() {
@@ -158,11 +219,11 @@ x_item_new() {
   esac
 
   local scope_dir target_dir
-  if [[ -n $dir ]]; then
-    scope_dir=$dir; target_dir=$dir
-  else
-    scope_dir=$(x_cycle_resolve "$cycle")
+  scope_dir=$(x_scope_dir_for "$cycle" "$dir")
+  if [[ -z $dir ]] && x_scope_is_cycle "$scope_dir"; then
     target_dir="$scope_dir/work-items"
+  else
+    target_dir=$scope_dir
   fi
   mkdir -p "$target_dir"
 
@@ -230,11 +291,11 @@ x_artifact_new() {
   esac
 
   local scope_dir target_dir
-  if [[ -n $dir ]]; then
-    scope_dir=$dir; target_dir=$dir
-  else
-    scope_dir=$(x_cycle_resolve "$cycle")
+  scope_dir=$(x_scope_dir_for "$cycle" "$dir")
+  if [[ -z $dir ]] && x_scope_is_cycle "$scope_dir"; then
     target_dir="$scope_dir/$subdir"
+  else
+    target_dir=$scope_dir
   fi
   mkdir -p "$target_dir"
 
@@ -284,8 +345,7 @@ x_cycle_check() {
   for file in "$dir"/work-items/*.md; do
     [[ -f $file ]] || continue
     status=$(x_field_get "$file" Status)
-    status=$(printf '%s' "$status" | tr '[:upper:]' '[:lower:]')
-    if [[ " $X_TERMINAL_STATUSES " != *" $status "* ]]; then
+    if ! x_status_is_terminal item "$status"; then
       printf 'BLOCKER work-item %s status=%s\n' "$(basename -- "$file")" "${status:-unknown}"
       blockers=$(( blockers + 1 ))
     fi
@@ -293,14 +353,10 @@ x_cycle_check() {
   for file in "$dir"/work-groups/*.md; do
     [[ -f $file ]] || continue
     status=$(x_field_get "$file" Status)
-    status=$(printf '%s' "$status" | tr '[:upper:]' '[:lower:]')
-    case $status in
-      merged|closed|cancelled|done) ;;
-      *)
-        printf 'BLOCKER work-group %s status=%s\n' "$(basename -- "$file")" "${status:-unknown}"
-        blockers=$(( blockers + 1 ))
-        ;;
-    esac
+    if ! x_status_is_terminal WG "$status"; then
+      printf 'BLOCKER work-group %s status=%s\n' "$(basename -- "$file")" "${status:-unknown}"
+      blockers=$(( blockers + 1 ))
+    fi
     local wt
     wt=$(x_field_get "$file" Worktree | tr -d '`')
     if [[ -n $wt && -d $wt ]]; then

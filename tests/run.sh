@@ -524,7 +524,7 @@ test_xdh_housekeeping_refuses_unsafe_removals() {
 
   # 1. Uncommitted work is never destroyed.
   echo scratch > "$worktree/scratch.txt"
-  rg -q '^ITEM DIRTY worktree ' <<<"$(cd "$repo" && "$xdh" clean scan)"
+  rg -q '^ITEM\tDIRTY\tworktree\t' <<<"$(cd "$repo" && "$xdh" clean scan)"
   (cd "$repo" && "$xdh" clean apply >/dev/null)
   [[ -d $worktree ]]
   [[ -f $worktree/scratch.txt ]]
@@ -532,14 +532,14 @@ test_xdh_housekeeping_refuses_unsafe_removals() {
   # 2. Committed but unintegrated work is never destroyed either.
   git -C "$worktree" add -A
   git -C "$worktree" commit -qm 'feat: widget'
-  rg -q '^ITEM UNMERGED worktree ' <<<"$(cd "$repo" && "$xdh" clean scan)"
+  rg -q '^ITEM\tUNMERGED\tworktree\t' <<<"$(cd "$repo" && "$xdh" clean scan)"
   (cd "$repo" && "$xdh" clean apply >/dev/null)
   [[ -d $worktree ]]
 
   # 3. Once merged, the worktree and then the branch become removable.
   git -C "$repo" merge -q --no-ff -m 'merge widget' \
     "$(git -C "$worktree" rev-parse --abbrev-ref HEAD)"
-  rg -q '^ITEM SAFE worktree ' <<<"$(cd "$repo" && "$xdh" clean scan)"
+  rg -q '^ITEM\tSAFE\tworktree\t' <<<"$(cd "$repo" && "$xdh" clean scan)"
   (cd "$repo" && "$xdh" clean apply >/dev/null)
   [[ ! -d $worktree ]]
   (cd "$repo" && "$xdh" clean apply >/dev/null)
@@ -796,6 +796,136 @@ test_xdh_keeps_every_temporary_file_inside_the_project() {
   [[ -z $(find "$repo/.dev-hub/runtime/.tmp" -type f 2>/dev/null) ]]
 }
 
+test_xdh_cleanup_survives_a_path_containing_spaces() {
+  # The repository sits under a directory with a space, as it routinely does on
+  # macOS ("My Projects", "Mobile Documents"). Word-splitting the scan records
+  # truncated every path at the first space.
+  local project="$TEST_ROOT/xdh-space" repo="$TEST_ROOT/xdh-space/with space/repo"
+  copy_project "$project"
+  "$project/bin/build.sh" >/dev/null
+  mkdir -p "$repo"
+  git init -q -b main "$repo"
+  git -C "$repo" config user.email test@example.invalid
+  git -C "$repo" config user.name 'Test Runner'
+  echo seed > "$repo/seed.txt"
+  git -C "$repo" add -A
+  git -C "$repo" commit -qm initial
+  local xdh="$project/commands/x-housekeeping/scripts/xdh"
+
+  # The decoy is exactly what the truncated path resolved to. If cleanup ever
+  # word-splits again, this directory is what rm -rf destroys.
+  local decoy="$TEST_ROOT/xdh-space/with"
+  mkdir -p "$decoy"
+  echo 'unrelated data' > "$decoy/decoy.txt"
+
+  (cd "$repo" && "$xdh" cycle new --slug spaced >/dev/null)
+  local worktree
+  worktree=$(cd "$repo" && "$xdh" wg new --slug widget |
+             rg -N --replace '$1' '^X_WG_WORKTREE=(.*)$')
+  [[ $worktree == *' '* ]]
+
+  # Uncommitted work is still protected when the path has a space — the old
+  # parse made `git -C <truncated> status` fail, which read as "clean".
+  echo scratch > "$worktree/scratch.txt"
+  rg -q '^ITEM\tDIRTY\tworktree\t' <<<"$(cd "$repo" && "$xdh" clean scan)"
+  (cd "$repo" && "$xdh" clean apply >/dev/null)
+  [[ -d $worktree ]]
+  [[ -f "$worktree/scratch.txt" ]]
+
+  # And a genuinely finished worktree is actually removed, not left behind
+  # with "removal-failed".
+  rm -f "$worktree/scratch.txt"
+  rg -q '^ITEM\tSAFE\tworktree\t' <<<"$(cd "$repo" && "$xdh" clean scan)"
+  local applied
+  applied=$(cd "$repo" && "$xdh" clean apply)
+  rg -q '^REMOVED worktree ' <<<"$applied"
+  [[ ! -d $worktree ]]
+
+  # Nothing outside the repository was touched.
+  [[ -f "$decoy/decoy.txt" ]]
+  [[ $(cat "$decoy/decoy.txt") == 'unrelated data' ]]
+  [[ -d "$TEST_ROOT/xdh-space/with space" ]]
+}
+
+test_xdh_standalone_planning_is_reusable() {
+  local project="$TEST_ROOT/xdh-standalone" repo="$TEST_ROOT/xdh-standalone-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-plan-eng/scripts/xdh"
+  # No Cycle anywhere: this is x-plan-eng invoked on a single requirement.
+  [[ ! -d "$repo/.dev-hub/active" || -z $(find "$repo/.dev-hub/active" -mindepth 1) ]]
+
+  # Work items need no flag and reuse on the second call.
+  local first second
+  first=$(cd "$repo" && "$xdh" item new --type issue --slug lone-task)
+  rg -q '^X_ITEM_ID=IS-001$' <<<"$first"
+  rg -q '^X_ITEM_REUSED=no$' <<<"$first"
+  second=$(cd "$repo" && "$xdh" item new --type issue --slug lone-task)
+  rg -q '^X_ITEM_REUSED=yes$' <<<"$second"
+  [[ $(rg '^X_ITEM_FILE=' <<<"$first") == "$(rg '^X_ITEM_FILE=' <<<"$second")" ]]
+  [[ $(find "$repo/.dev-hub" -name 'IS-*.md' | wc -l) -eq 1 ]]
+
+  # A second, different item shares the standalone ID space.
+  rg -q '^X_ITEM_ID=IS-002$' <<<"$(cd "$repo" && "$xdh" item new --type issue --slug other-task)"
+
+  # Work Groups reuse too: the scope must not move between invocations, or the
+  # same slug ends up with a second branch and a second worktree.
+  local wg1 wg2
+  wg1=$(cd "$repo" && "$xdh" wg new --slug lone-task --items IS-001)
+  rg -q '^X_WG_ID=WG-001$' <<<"$wg1"
+  rg -q '^X_WG_REUSED=no$' <<<"$wg1"
+  wg2=$(cd "$repo" && "$xdh" wg new --slug lone-task)
+  rg -q '^X_WG_REUSED=yes$' <<<"$wg2"
+  rg -q '^X_WORKTREE_CREATED=no$' <<<"$wg2"
+  [[ $(rg '^X_WG_BRANCH=' <<<"$wg1") == "$(rg '^X_WG_BRANCH=' <<<"$wg2")" ]]
+  [[ $(rg '^X_WG_FILE=' <<<"$wg1") == "$(rg '^X_WG_FILE=' <<<"$wg2")" ]]
+  [[ $(git -C "$repo" branch --list 'x/*' | wc -l) -eq 1 ]]
+  [[ $(git -C "$repo" worktree list | wc -l) -eq 2 ]]
+  [[ $(find "$repo/.dev-hub" -name 'WG-*.md' | wc -l) -eq 1 ]]
+
+  # Concurrent standalone planning is mutually excluded, which it cannot be
+  # while the lock lives in a directory minted fresh per invocation.
+  local wg
+  for wg in alpha beta gamma; do
+    (cd "$repo" && "$xdh" wg new --slug "$wg" > "$project/sa-$wg.out" 2>&1) &
+  done
+  wait
+  [[ $(cat "$project"/sa-*.out | rg '^X_WG_ID=' | sort -u | wc -l) -eq 3 ]]
+
+  # An explicit --dir still wins, for callers that want an isolated bundle.
+  local bundle
+  bundle=$(cd "$repo" && "$xdh" runtime new --skill x-plan-eng --slug bundle |
+           rg -N --replace '$1' '^X_RUNTIME_DIR=(.*)$')
+  rg -q "^X_ITEM_FILE=$bundle/IS-001-scoped\.md$" \
+    <<<"$(cd "$repo" && "$xdh" item new --type issue --slug scoped --dir "$bundle")"
+}
+
+test_xdh_housekeeping_spares_runtime_holding_live_work() {
+  local project="$TEST_ROOT/xdh-live" repo="$TEST_ROOT/xdh-live-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-housekeeping/scripts/xdh"
+
+  (cd "$repo" && "$xdh" wg new --slug ongoing >/dev/null)
+  local standalone="$repo/.dev-hub/runtime/standalone"
+  [[ -d $standalone ]]
+  local wg_file
+  wg_file=$(find "$standalone" -name 'WG-*.md' | head -1)
+  [[ -n $wg_file ]]
+
+  # Age it well past the retention window. Age alone must not make live
+  # planning state collectable, or an open Work Group gets rm -rf'd.
+  touch -d '60 days ago' "$standalone"
+  local scan
+  scan=$(cd "$repo" && "$xdh" clean scan)
+  rg -q "^ITEM\tACTIVE\truntime\t$standalone\tholds-live-work$" <<<"$scan"
+  (cd "$repo" && "$xdh" clean apply >/dev/null)
+  [[ -f $wg_file ]]
+
+  # Once the work is finished, the same directory becomes collectable.
+  (cd "$repo" && "$xdh" field set "$wg_file" Status merged >/dev/null)
+  touch -d '60 days ago' "$standalone"
+  rg -q "^ITEM\tSAFE\truntime\t$standalone\t" <<<"$(cd "$repo" && "$xdh" clean scan)"
+}
+
 run_test 'build injects once and copies support files' test_build_injects_header_and_support_files
 run_test 'invalid build preserves previous deployment' test_build_rejects_invalid_frontmatter_without_destroying_output
 run_test 'build accepts crlf frontmatter' test_build_accepts_crlf_frontmatter
@@ -823,6 +953,9 @@ run_test 'xdh refuses to guess between ambiguous cycles' test_xdh_refuses_to_gue
 run_test 'xdh recreates a stale worktree registration' test_xdh_recreates_a_stale_worktree_registration
 run_test 'xdh pr lookup distinguishes forks' test_xdh_pr_lookup_distinguishes_forks
 run_test 'xdh keeps temporary files inside the project' test_xdh_keeps_every_temporary_file_inside_the_project
+run_test 'xdh cleanup survives a path containing spaces' test_xdh_cleanup_survives_a_path_containing_spaces
+run_test 'xdh standalone planning is reusable' test_xdh_standalone_planning_is_reusable
+run_test 'xdh housekeeping spares runtime holding live work' test_xdh_housekeeping_spares_runtime_holding_live_work
 
 printf '\nRESULT: %d passed, %d failed\n' "$passed" "$failed"
 (( failed == 0 ))

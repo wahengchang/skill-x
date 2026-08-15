@@ -10,6 +10,37 @@
 #   ACTIVE   — still in use / too recent
 #   ORPHAN   — Git metadata pointing at a path that no longer exists
 
+# A deletable target must live under the directory its kind belongs to.
+# Branches are refs, not paths, and are checked by name instead.
+x_clean_target_is_contained() {
+  local kind=$1 target=$2
+  x_resolve_paths
+  case $kind in
+    worktree) [[ $target == "$X_WORKTREES"/* ]] ;;
+    runtime) [[ $target == "$X_RUNTIME"/* ]] ;;
+    cycle-tmp) [[ $target == "$X_ACTIVE"/*/tmp ]] ;;
+    branch) [[ $target == x/* ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+# A scratch directory that still holds unfinished planning documents is live
+# work, whatever its age. Standalone WGs and work items live under runtime/,
+# so an age-only rule would eventually rm -rf a Work Group that is still open.
+x_clean_dir_holds_live_work() {
+  local dir=$1 file kind status
+  while IFS= read -r file; do
+    [[ -n $file ]] || continue
+    kind=item
+    if [[ $(basename -- "$file") == WG-* ]]; then kind=WG; fi
+    status=$(x_field_get "$file" Status 2>/dev/null || printf '')
+    if ! x_status_is_terminal "$kind" "$status"; then
+      return 0
+    fi
+  done < <(find "$dir" -type f \( -name 'WG-*.md' -o -name 'IS-*.md' -o -name 'SP-*.md' \) 2>/dev/null)
+  return 1
+}
+
 x_clean_scan() {
   local base="" older_than=7
   while (( $# )); do
@@ -36,17 +67,17 @@ x_clean_scan() {
       "")
         if [[ -n $path && $path == "$X_WORKTREES"/* ]]; then
           if [[ ! -d $path ]]; then
-            printf 'ITEM ORPHAN worktree %s missing-directory\n' "$path"
+            printf 'ITEM\tORPHAN\tworktree\t%s\tmissing-directory\n' "$path"
             blocked=$(( blocked + 1 ))
           elif [[ -n $(git -C "$path" status --porcelain 2>/dev/null) ]]; then
-            printf 'ITEM DIRTY worktree %s uncommitted-changes\n' "$path"
+            printf 'ITEM\tDIRTY\tworktree\t%s\tuncommitted-changes\n' "$path"
             blocked=$(( blocked + 1 ))
           elif [[ -n $branch && $branch != "(detached)" ]] &&
                [[ -n $(git -C "$X_MAIN_ROOT" log --oneline "$base_ref..$branch" 2>/dev/null) ]]; then
-            printf 'ITEM UNMERGED worktree %s branch=%s\n' "$path" "$branch"
+            printf 'ITEM\tUNMERGED\tworktree\t%s\tbranch=%s\n' "$path" "$branch"
             blocked=$(( blocked + 1 ))
           else
-            printf 'ITEM SAFE worktree %s branch=%s\n' "$path" "${branch:-none}"
+            printf 'ITEM\tSAFE\tworktree\t%s\tbranch=%s\n' "$path" "${branch:-none}"
             safe=$(( safe + 1 ))
           fi
         fi
@@ -63,10 +94,10 @@ x_clean_scan() {
     [[ -n $b ]] || continue
     if printf '%s\n' "$checked_out" | grep -Fxq "$b"; then continue; fi
     if [[ -n $(git -C "$X_MAIN_ROOT" log --oneline "$base_ref..$b" 2>/dev/null) ]]; then
-      printf 'ITEM UNMERGED branch %s not-integrated\n' "$b"
+      printf 'ITEM\tUNMERGED\tbranch\t%s\tnot-integrated\n' "$b"
       blocked=$(( blocked + 1 ))
     else
-      printf 'ITEM SAFE branch %s integrated\n' "$b"
+      printf 'ITEM\tSAFE\tbranch\t%s\tintegrated\n' "$b"
       safe=$(( safe + 1 ))
     fi
   done < <(git -C "$X_MAIN_ROOT" for-each-ref --format='%(refname:short)' 'refs/heads/x/*' 2>/dev/null)
@@ -77,11 +108,13 @@ x_clean_scan() {
     while IFS= read -r dir; do
       [[ -n $dir ]] || continue
       if [[ $dir == "$X_RUNTIME" ]]; then continue; fi
-      if [[ -n $(find "$dir" -maxdepth 0 -mtime +"$older_than" 2>/dev/null) ]]; then
-        printf 'ITEM SAFE runtime %s older-than-%sd\n' "$dir" "$older_than"
+      if x_clean_dir_holds_live_work "$dir"; then
+        printf 'ITEM\tACTIVE\truntime\t%s\tholds-live-work\n' "$dir"
+      elif [[ -n $(find "$dir" -maxdepth 0 -mtime +"$older_than" 2>/dev/null) ]]; then
+        printf 'ITEM\tSAFE\truntime\t%s\tolder-than-%sd\n' "$dir" "$older_than"
         safe=$(( safe + 1 ))
       else
-        printf 'ITEM ACTIVE runtime %s recent\n' "$dir"
+        printf 'ITEM\tACTIVE\truntime\t%s\trecent\n' "$dir"
       fi
     done < <(find "$X_RUNTIME" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null)
   fi
@@ -93,7 +126,7 @@ x_clean_scan() {
       [[ -n $cycle ]] || continue
       [[ -d $cycle/tmp ]] || continue
       [[ -n $(find "$cycle/tmp" -mindepth 1 -maxdepth 1 2>/dev/null) ]] || continue
-      printf 'ITEM SAFE cycle-tmp %s scratch\n' "$cycle/tmp"
+      printf 'ITEM\tSAFE\tcycle-tmp\t%s\tscratch\n' "$cycle/tmp"
       safe=$(( safe + 1 ))
     done < <(find "$X_ACTIVE" -mindepth 1 -maxdepth 1 -type d -name 'cycle-*' 2>/dev/null)
   fi
@@ -119,9 +152,20 @@ x_clean_apply() {
   scan=$(x_clean_scan "${scan_args[@]}")
   printf '%s\n' "$scan"
 
-  local removed=0 kind target class rest
-  while read -r _ class kind target rest; do
+  # Tab-separated, so a repository path containing a space cannot truncate the
+  # target. Reading these records with default word splitting turned
+  # "/repo/.dev-hub/runtime/x" under "/home/u/proj v2" into "/home/u/proj" —
+  # a real sibling directory, passed straight to rm -rf.
+  local removed=0 kind target class detail
+  while IFS=$'\t' read -r _ class kind target detail; do
     [[ $class == SAFE ]] || continue
+    [[ -n $target ]] || continue
+    # Independent of the parse: nothing outside the directory a kind belongs to
+    # is ever deletable, so a future field change cannot reach the filesystem.
+    if ! x_clean_target_is_contained "$kind" "$target"; then
+      printf 'SKIPPED %s %s outside-dev-hub\n' "$kind" "$target"
+      continue
+    fi
     if [[ $dry_run == yes ]]; then
       printf 'WOULD-REMOVE %s %s\n' "$kind" "$target"
       continue

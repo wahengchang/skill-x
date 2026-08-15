@@ -77,6 +77,7 @@ canonical skill 的唯一來源仍是 `commands-src/<name>/`；不要直接編�
 ├── active/      進行中的 Cycle（ignored）
 ├── worktrees/   WG 的 linked worktrees（ignored）
 ├── runtime/     standalone 執行的暫存（ignored）
+│   └── standalone/  沒有 Cycle 時的規劃文件；路徑固定，才能重用與上鎖
 └── logs/        完成 Cycle 的短紀錄（tracked，唯一會進 Git 的部分）
 ```
 
@@ -129,7 +130,7 @@ bin/cloud-bootstrap.sh <private-repo-url> <tag-or-commit>
 make test
 ```
 
-測試結束時應顯示 `RESULT: 27 passed, 0 failed`。這能驗證 shell 腳本與檔案行為；Claude Code、Codex CLI、OpenCode 是否實際發現技能，以及 AI 是否依照自然語言指示詢問，仍需分別在三個工具做端到端人工 smoke test：
+測試結束時應顯示 `RESULT: 30 passed, 0 failed`。這能驗證 shell 腳本與檔案行為；Claude Code、Codex CLI、OpenCode 是否實際發現技能，以及 AI 是否依照自然語言指示詢問，仍需分別在三個工具做端到端人工 smoke test：
 
 1. 執行 `./install.sh` 與 `bin/doctor.sh`，確認四個技能路徑與 OpenCode command 區段皆為 `OK`。
 2. 重新啟動三個工具（skills 與 commands 在啟動時載入）。

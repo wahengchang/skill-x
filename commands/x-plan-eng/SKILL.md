@@ -88,8 +88,11 @@ Also challenge the scope before defining it:
 "$XDH" item new --type spike --slug "<slug>" --title "<title>" --source WK-004
 ```
 
-Add `--dir <path>` in standalone mode; `xdh runtime new --skill x-plan-eng`
-provides a project-local directory for it.
+Standalone mode needs no extra flag: with no Cycle present, planning documents
+land in a shared standalone scope under `.dev-hub/`, which stays put between
+invocations so re-planning the same work reuses it. Pass `--dir <path>` only
+when you deliberately want an isolated bundle — a scope that moves every run
+cannot be reused, and its IDs restart from 001 each time.
 
 ### 4. Define an Issue to executable depth
 

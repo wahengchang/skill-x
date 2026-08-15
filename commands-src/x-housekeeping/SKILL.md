@@ -55,13 +55,17 @@ local branches with `git branch -d` only, and never uses `-D` or
 "$XDH" clean scan
 ```
 
-Each line is `ITEM <class> <kind> <path> <detail>`:
+Each line is `ITEM<TAB><class><TAB><kind><TAB><path><TAB><detail>`. The fields are
+tab-separated because a repository path may contain spaces; split these records
+on tabs, never on whitespace.
 
 - `SAFE` — clean worktree on an integrated branch, integrated local branch,
   expired runtime scratch, finished Cycle `tmp/`.
 - `DIRTY` — uncommitted changes present.
 - `UNMERGED` — commits that do not exist on the base branch.
-- `ACTIVE` — still in use or too recent.
+- `ACTIVE` — still in use, too recent, or `holds-live-work`: a runtime
+  directory containing a work item or Work Group that has not reached a
+  terminal status is live planning state, whatever its age.
 - `ORPHAN` — Git metadata pointing at a path that no longer exists.
 
 Report the classification before acting. If any `UNMERGED` item exists, say what

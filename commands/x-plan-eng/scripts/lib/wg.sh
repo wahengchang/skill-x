@@ -5,12 +5,13 @@
 # Every step is idempotent: re-running never produces WG-002 for work that is
 # already WG-001, never creates a second branch, and never re-adds a worktree.
 x_wg_new() {
-  local slug="" title="" cycle="" items="—" owner="—" base="" from=""
+  local slug="" title="" cycle="" items="—" owner="—" base="" from="" dir=""
   while (( $# )); do
     case $1 in
       --slug) slug=$2; shift 2 ;;
       --title) title=$2; shift 2 ;;
       --cycle) cycle=$2; shift 2 ;;
+      --dir) dir=$2; shift 2 ;;
       --items) items=$2; shift 2 ;;
       --owner) owner=$2; shift 2 ;;
       --base) base=$2; shift 2 ;;
@@ -27,15 +28,16 @@ x_wg_new() {
   [[ -n $base ]] || base=$(x_base_branch)
   [[ -n $from ]] || from=$(x_base_ref "$base")
 
-  local cycle_dir="" stamp target_dir
-  if cycle_dir=$(x_cycle_resolve "$cycle" 2>/dev/null); then
-    stamp=$(x_cycle_stamp "$(basename -- "$cycle_dir")")
-    target_dir="$cycle_dir/work-groups"
+  # Standalone mode needs no Cycle, but it does need a *stable* scope: the
+  # reuse scan, the ID space and the lock all key off this directory.
+  local scope_dir stamp target_dir
+  scope_dir=$(x_scope_dir_for "$cycle" "$dir")
+  if [[ -z $dir ]] && x_scope_is_cycle "$scope_dir"; then
+    stamp=$(x_cycle_stamp "$(basename -- "$scope_dir")")
+    target_dir="$scope_dir/work-groups"
   else
-    # Standalone mode: no Cycle required, the WG document lives in runtime.
-    cycle_dir=$(x_runtime_new --skill x-plan-eng --slug "$slug" | sed -n 's/^X_RUNTIME_DIR=//p')
     stamp=$(x_stamp)
-    target_dir=$cycle_dir
+    target_dir=$scope_dir
   fi
   mkdir -p "$target_dir"
 
@@ -45,7 +47,7 @@ x_wg_new() {
   # lets two agents planning at the same moment both observe an empty
   # work-groups/ and both claim WG-001.
   local id file existing found=no lower branch worktree
-  x_lock "$cycle_dir/.xdh-id.lock"
+  x_lock "$scope_dir/.xdh-id.lock"
   for existing in "$target_dir/WG-"*"-$slug.md"; do
     if [[ -f $existing ]]; then
       id=$(basename -- "$existing" | cut -d- -f1,2)
@@ -61,7 +63,7 @@ x_wg_new() {
     branch=$(x_field_get "$file" Branch | tr -d '`')
     worktree=$(x_field_get "$file" Worktree | tr -d '`')
   else
-    id=$(x_id_next WG "$cycle_dir")
+    id=$(x_id_next WG "$scope_dir")
     file="$target_dir/$id-$slug.md"
     lower=$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')
     branch="x/$stamp-$lower-$slug"
@@ -141,7 +143,11 @@ x_worktree_list() {
       "branch "*) branch=${line#branch refs/heads/} ;;
       "detached") branch="(detached)" ;;
       "")
-        [[ -n $path ]] && printf 'WORKTREE %s %s\n' "${branch:-(none)}" "$path"
+        # Tab-separated, like every other machine-readable record here: a path
+        # can contain spaces, so a space-separated record is not a format.
+        if [[ -n $path ]]; then
+          printf 'WORKTREE\t%s\t%s\n' "${branch:-(none)}" "$path"
+        fi
         path=""
         ;;
     esac

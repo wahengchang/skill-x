@@ -69,11 +69,13 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 | `pr status/upsert` | 以 head branch **與 head repository owner** 兩者定位 PR，create-or-update 單一 PR；沒有 `gh` 就回報 `no-provider` 而不是假裝有 PR |
 | `worktree`、`clean scan/apply` | 分類 SAFE / DIRTY / UNMERGED / ACTIVE / ORPHAN，只刪 SAFE，且刪前再檢查一次 |
 
-四個設計選擇值得說明：
+六個設計選擇值得說明：
 
 - **Fingerprint 綁內容，不綁時間。** 用暫時 `GIT_INDEX_FILE` 做 `read-tree` + `add -A` + `write-tree`，得到的 tree 同時涵蓋已 commit 與未 commit 的內容，因此「把未 commit 的東西 commit 起來」不會改變 fingerprint，而任何一個字元的改動都會。快照前會先把 `.dev-hub/active|runtime|worktrees` 從暫時 index 移除，否則這個指令自己產生的暫存檔會讓結果不穩定。
 - **「檢查既有」與「配號建檔」必須在同一個 critical section。** `id next` 只是查詢；真正保證不重號的是 `cycle new` / `item new` / `wg new` / `artifact new`——它們在同一個鎖裡完成「掃描是否已存在 → 取最大號 +1 → 寫檔（讓下一次掃描看得到）」。只鎖住配號、把寫檔留到鎖外，會讓兩個同時規劃的 agent 都掃到空目錄、都拿到 `WG-001`。`cycle new` 也要上鎖：目錄名帶到分鐘的時間戳，跨分鐘邊界的兩個併發呼叫會建出兩個同 slug 的 active Cycle，之後每一次 lookup 都變成 ambiguous。
 - **worktree 的「已註冊」不等於「可用」。** 目錄被手動刪掉時 `git worktree list` 仍會列出它。所以重用前要確認 `path/.git` 真的存在、而且 HEAD 就在預期的 branch 上；註冊是 stale 就 `git worktree prune` 後重建，路徑被無關內容佔用則直接停下來，不覆蓋。
+- **機器可讀記錄一律 TSV。** 路徑會含空白（macOS 的 `My Projects`、`Mobile Documents` 是常態），所以以空白分隔的記錄不是格式而是陷阱：`clean apply` 曾用 `read -r _ class kind target rest` 解析，repo 位於 `/home/u/proj v2/` 時 `target` 被截成 `/home/u/proj`，dirty 護欄因為 `git -C <截斷路徑>` 失敗而靜默通過，`rm -rf` 則打到一個真實存在的同層目錄。現在 `clean scan`、`worktree list` 與 `pr` 查詢一律 tab 分隔、以 `IFS=$'\t'` 讀取；刪除前另有一道與解析無關的收容檢查，確保任何 kind 都只能刪到它該待的目錄底下。
+- **standalone scope 必須是固定路徑。** 沒有 Cycle 時，規劃文件的 scope 曾用 `xdh runtime new` 產生帶秒級時間戳的目錄，等於每次呼叫都換一個位置：reuse 掃描永遠掃到空的、ID 每次從 001 重來、跨分鐘重跑會替同一個 slug 生出第二條 branch 與第二個 worktree，而且鎖開在那個每次都不同的目錄裡——standalone 模式根本沒有互斥。現在固定為 `.dev-hub/runtime/standalone/`，Cycle 模式與 standalone 模式走同一套 reuse／配號／上鎖邏輯。相對的，`clean scan` 也必須知道「含有未終結 WG／work item 的 runtime 目錄是活的」，否則保留期一過就會把還開著的 Work Group 刪掉。work item 與 WG 的終結狀態不同（前者 done/cancelled/deferred，後者 merged/closed/…），這個判斷收斂在 `x_status_is_terminal`，避免 closure gate 與 housekeeping 兩處各寫一份而漂移。
 - **PR 不能只用 branch name 當 key。** branch 推到 fork 時，同一個 base repository 上可能有多個 fork 都開著叫 `fix` 的 PR。因此查詢會同時比對 `headRefName` 與 `headRepositoryOwner`（owner 由 push remote 的 URL 推得）；仍然分不出來時回報 `X_PR_STATE=ambiguous` 並拒絕更新，而不是賭一個把別人的 PR body 蓋掉。查詢用 `gh --jq` 輸出 TSV，比對留在 shell 字串比較，既避免手寫 JSON parser，也讓這段邏輯可以被測試。
 
 ### 更新檢查
