@@ -8,27 +8,9 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 export SKILL_X_OPENCODE_VERSION=v1
 export SKILL_X_AGENTS=claude,codex,opencode
 
-passed=0
-failed=0
-
-run_test() {
-  local name=$1
-  shift
-  if "$@"; then
-    printf 'PASS: %s\n' "$name"
-    passed=$((passed + 1))
-  else
-    printf 'FAIL: %s\n' "$name" >&2
-    failed=$((failed + 1))
-  fi
-}
-
-copy_project() {
-  local destination=$1
-  mkdir -p "$destination"
-  cp -a "$PROJECT_ROOT/." "$destination/"
-  rm -rf "$destination/.git" "$destination/commands" "$destination/opencode-commands" "$destination/.claude"
-}
+# shellcheck source=lib/harness.sh
+source "$PROJECT_ROOT/tests/lib/harness.sh"
+skill_x_test_parse_args "$@"
 
 manifest_of() {
   find "$1/.local/state/skill-x" -mindepth 2 -maxdepth 2 -name install.json -print -quit 2>/dev/null
@@ -163,5 +145,4 @@ run_test 'sync preserves foreign symlink ownership' test_sync_preserves_foreign_
 run_test 'remove-checkout protects ignored local files' test_remove_checkout_refuses_ignored_local_files
 run_test 'cloud bootstrap preserves foreign symlinks' test_cloud_bootstrap_preserves_foreign_symlink
 
-printf '\nRESULT: %d passed, %d failed\n' "$passed" "$failed"
-(( failed == 0 ))
+skill_x_test_finish 'pr10 safety regression'

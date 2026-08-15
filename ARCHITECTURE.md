@@ -158,8 +158,11 @@ bin/doctor.sh                  相容包裝 → skill-x doctor
 commands/                      build 產生的 canonical artifact（.gitignore）
 opencode-commands/             build 產生的 OpenCode v1 command shim（.gitignore）
 install.sh                     相容包裝 → skill-x init
-tests/run.sh                   不需網路的整合測試
+tests/run.sh                   不需網路的整合測試（`--fast` 只跑常用子集，預設全跑）
+tests/pr10-safety-regression.sh 擁有權安全性 regression tests
 tests/pr15-regression.sh       target contract 與 legacy pinned-ref regression tests
+tests/lib/harness.sh           共用測試 harness：suite 選擇、計時、逾時、fixture 快取
+tests/lib/timeout-fixture.sh   驗證 harness 逾時路徑的受控 fixture
 ```
 
 ## 已知限制與優先驗證
@@ -190,4 +193,4 @@ tests/pr15-regression.sh       target contract 與 legacy pinned-ref regression 
 - 新機器：clone 後執行 `./install.sh`（或 `bin/skill-x init --agents ...`）。
 - 個人機器手動更新：`bin/skill-x update`（或非互動時 `bin/skill-x update --yes`）。
 - image 升級：更新 pinned ref 並重建，不在 runtime pull。
-- 每次修改腳本後執行 `make test`；測試使用暫存 HOME 與本機 bare Git remote，不會接觸使用者的真實技能目錄或遠端 repository。
+- 每次修改腳本（`bin/`、`tests/`、`install.sh`）後執行 `make test-full`；只改技能內容時 `make test`（快速組）即可。兩組都使用暫存 HOME 與本機 bare Git remote，不會接觸使用者的真實技能目錄或遠端 repository。

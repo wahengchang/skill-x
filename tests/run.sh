@@ -5,38 +5,27 @@ PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 TEST_ROOT=$(cd -- "$(mktemp -d "${TMPDIR:-/tmp}/skill-x-tests.XXXXXX")" && pwd -P)
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
-passed=0
-failed=0
-
 # Keep the suite hermetic: never let locally installed agents decide which
 # code paths the scripts take. Detection and selection tests override these.
 export SKILL_X_OPENCODE_VERSION=v1
 export SKILL_X_AGENTS=claude,codex,opencode
 
-run_test() {
-  local name=$1
-  shift
-  printf 'TEST  %s ... ' "$name"
-  set +e
-  (set -euo pipefail; "$@")
-  local status=$?
-  set -e
-  if (( status == 0 )); then
-    echo PASS
-    passed=$((passed + 1))
-  else
-    echo FAIL
-    failed=$((failed + 1))
-  fi
-}
+# shellcheck source=lib/harness.sh
+source "$PROJECT_ROOT/tests/lib/harness.sh"
+skill_x_test_parse_args "$@"
 
-copy_project() {
-  local destination=$1
-  mkdir -p "$destination"
-  cp -a "$PROJECT_ROOT/." "$destination/"
-  rm -rf "$destination/.git" "$destination/commands" "$destination/opencode-commands"
-  # Agent-local state is not part of a fresh repository fixture.
-  rm -rf "$destination/.claude"
+# The harness itself: a test that never returns must be terminated and reported
+# as a failure, otherwise a worktree lock or a stalled subprocess silently eats
+# the whole session. The fixture suite is bounded to a two-second timeout.
+test_harness_terminates_a_stalled_test() {
+  local output
+  if output=$(SKILL_X_TEST_TIMEOUT=2 bash "$PROJECT_ROOT/tests/lib/timeout-fixture.sh" 2>&1); then
+    printf '%s\n' "$output" >&2
+    echo 'stalled test fixture unexpectedly succeeded' >&2
+    return 1
+  fi
+  rg -q 'TIMEOUT after 2s' <<<"$output"
+  rg -q '1 failed' <<<"$output"
 }
 
 test_build_injects_header_and_support_files() {
@@ -131,8 +120,7 @@ test_sync_installs_opencode_v1_commands() {
   local project="$TEST_ROOT/opencode-v1"
   local home="$TEST_ROOT/opencode-v1-home"
   local commands="$home/.config/opencode/commands"
-  copy_project "$project"
-  "$project/bin/build.sh" >/dev/null
+  copy_built_project "$project"
   mkdir -p "$commands"
   echo 'user owned' > "$commands/example-skill.md"
   cp "$project/opencode-commands/herdr.md" "$commands/herdr.md"
@@ -143,7 +131,7 @@ test_sync_installs_opencode_v1_commands() {
   # A pre-existing non-managed command is never overwritten.
   [[ ! -L "$commands/example-skill.md" ]]
   [[ $(cat "$commands/example-skill.md") == 'user owned' ]]
-  rg -q 'skipping non-symlink path' "$project/warnings"
+  rg -q 'skipping unowned non-symlink path' "$project/warnings"
 
   # Everything else is linked once, idempotently, at the canonical shim.
   [[ -L "$commands/funny-text-rewriter.md" ]]
@@ -186,8 +174,7 @@ test_sync_v2_removes_generated_commands() {
   local project="$TEST_ROOT/opencode-v2"
   local home="$TEST_ROOT/opencode-v2-home"
   local commands="$home/.config/opencode/commands"
-  copy_project "$project"
-  "$project/bin/build.sh" >/dev/null
+  copy_built_project "$project"
   HOME="$home" SKILL_X_OPENCODE_VERSION=v1 "$project/bin/sync-skills.sh" >/dev/null
   echo 'user owned' > "$commands/user-command.md"
 
@@ -255,8 +242,7 @@ EOF
 test_sync_is_idempotent_and_preserves_collisions() {
   local project="$TEST_ROOT/sync"
   local home="$TEST_ROOT/sync-home"
-  copy_project "$project"
-  "$project/bin/build.sh" >/dev/null
+  copy_built_project "$project"
   mkdir -p "$home/.claude/skills/example-skill"
   echo keep > "$home/.claude/skills/example-skill/user-file"
 
@@ -270,14 +256,13 @@ test_sync_is_idempotent_and_preserves_collisions() {
     [[ -L "$home/$path" ]]
     [[ $(readlink "$home/$path") == "$project/commands/example-skill" ]]
   done
-  rg -q 'skipping non-symlink path' "$project/warnings"
+  rg -q 'skipping unowned non-symlink path' "$project/warnings"
 }
 
 make_git_fixture() {
   local project=$1
   local remote=$2
-  copy_project "$project"
-  "$project/bin/build.sh" >/dev/null
+  copy_built_project "$project"
   git init -q --bare "$remote"
   git -C "$project" init -q
   git -C "$project" config user.email test@example.invalid
@@ -380,7 +365,12 @@ test_cloud_bootstrap_installs_command_shims() {
   ref=$(git -C "$project" rev-parse HEAD)
   mkdir -p "$commands"
   echo 'user owned' > "$commands/example-skill.md"
-  ln -s "$project/opencode-commands/herdr.md" "$commands/herdr.md"
+  # A reused image layer or HOME still holds the symlinks an earlier managed
+  # sync created. Those are recorded in the manifest, so the pinned copy is
+  # allowed to unlink them; anything unmanaged is not touched.
+  HOME="$home" SKILL_X_OPENCODE_VERSION=v1 SKILL_X_AGENTS=opencode \
+    "$project/bin/skill-x" install >/dev/null 2>&1
+  [[ -L "$commands/herdr.md" ]]
 
   HOME="$home" SKILL_X_OPENCODE_VERSION=v1 \
     "$project/bin/cloud-bootstrap.sh" "file://$remote" "$ref" >/dev/null 2>"$project/cloud-warnings"
@@ -404,8 +394,7 @@ X_SKILLS=(x-discovery x-plan-eng x-review x-debug x-ship x-housekeeping)
 
 test_build_materializes_shared_skill_assets() {
   local project="$TEST_ROOT/x-assets"
-  copy_project "$project"
-  "$project/bin/build.sh" >/dev/null
+  copy_built_project "$project"
 
   local skill
   for skill in "${X_SKILLS[@]}"; do
@@ -428,8 +417,7 @@ test_build_materializes_shared_skill_assets() {
 # the *deployed* xdh — the exact file a synced tool would execute.
 make_xdh_fixture() {
   local project=$1 repo=$2
-  copy_project "$project"
-  "$project/bin/build.sh" >/dev/null
+  copy_built_project "$project"
   mkdir -p "$repo"
   git init -q -b main "$repo"
   git -C "$repo" config user.email test@example.invalid
@@ -527,8 +515,7 @@ test_xdh_fingerprint_tracks_content_not_time() {
 
 test_x_review_documents_cross_model_dispatch() {
   local project="$TEST_ROOT/x-review-skill"
-  copy_project "$project"
-  "$project/bin/build.sh" >/dev/null
+  copy_built_project "$project"
   local skill="$project/commands/x-review/SKILL.md"
 
   # Two independent reviewer paths, CLI preferred over the host subagent, and
@@ -883,8 +870,7 @@ test_xdh_cleanup_survives_a_path_containing_spaces() {
   # macOS ("My Projects", "Mobile Documents"). Word-splitting the scan records
   # truncated every path at the first space.
   local project="$TEST_ROOT/xdh-space" repo="$TEST_ROOT/xdh-space/with space/repo"
-  copy_project "$project"
-  "$project/bin/build.sh" >/dev/null
+  copy_built_project "$project"
   mkdir -p "$repo"
   git init -q -b main "$repo"
   git -C "$repo" config user.email test@example.invalid
@@ -1012,8 +998,7 @@ test_xdh_housekeeping_spares_runtime_holding_live_work() {
 test_sync_new_canonical_consumer_from_targets_conf() {
   local project="$TEST_ROOT/new-consumer"
   local home="$TEST_ROOT/new-consumer-home"
-  copy_project "$project"
-  "$project/bin/build.sh" >/dev/null
+  copy_built_project "$project"
 
   mkdir -p "$home/.my-custom-agent/skills"
   cat > "$project/bin/targets/targets.conf" <<'EOF'
@@ -1520,8 +1505,7 @@ test_uninstall_removes_managed_entries_only() {
 test_uninstall_refuses_to_delete_a_dirty_checkout() {
   local project="$TEST_ROOT/uninstall-dirty"
   local home="$TEST_ROOT/uninstall-dirty-home"
-  copy_project "$project"
-  "$project/bin/build.sh" >/dev/null
+  copy_built_project "$project"
   git -C "$project" init -q
   git -C "$project" config user.email test@example.invalid
   git -C "$project" config user.name 'Test Runner'
@@ -1630,17 +1614,18 @@ test_cloud_bootstrap_v2_removes_pinned_v1_shims() {
   [[ -f "$home/.config/opencode/skills/example-skill/SKILL.md" ]]
 }
 
-run_test 'build injects once and copies support files' test_build_injects_header_and_support_files
-run_test 'invalid build preserves previous deployment' test_build_rejects_invalid_frontmatter_without_destroying_output
-run_test 'build accepts crlf frontmatter' test_build_accepts_crlf_frontmatter
-run_test 'build generates delegating opencode command shims' test_build_generates_opencode_command_shims
-run_test 'opencode version detection and override' test_opencode_version_detection
-run_test 'sync is idempotent and preserves collisions' test_sync_is_idempotent_and_preserves_collisions
+run_test --fast 'harness terminates a stalled test' test_harness_terminates_a_stalled_test
+run_test --fast 'build injects once and copies support files' test_build_injects_header_and_support_files
+run_test --fast 'invalid build preserves previous deployment' test_build_rejects_invalid_frontmatter_without_destroying_output
+run_test --fast 'build accepts crlf frontmatter' test_build_accepts_crlf_frontmatter
+run_test --fast 'build generates delegating opencode command shims' test_build_generates_opencode_command_shims
+run_test --fast 'opencode version detection and override' test_opencode_version_detection
+run_test --fast 'sync is idempotent and preserves collisions' test_sync_is_idempotent_and_preserves_collisions
 run_test 'sync removes links for deleted skills' test_sync_removes_links_for_deleted_skills
 run_test 'sync installs opencode v1 commands without clobbering' test_sync_installs_opencode_v1_commands
 run_test 'sync removes stale opencode commands' test_sync_removes_stale_opencode_commands
 run_test 'opencode v2 sync removes generated commands' test_sync_v2_removes_generated_commands
-run_test 'build outputs are gitignored disposable artifacts' test_build_outputs_are_gitignored_artifacts
+run_test --fast 'build outputs are gitignored disposable artifacts' test_build_outputs_are_gitignored_artifacts
 run_test 'install from source-only checkout succeeds' test_install_from_source_only_checkout
 run_test 'apply update rebuilds after pull' test_apply_update_rebuilds_after_pull
 run_test 'cloud bootstrap builds source-only pinned ref' test_cloud_bootstrap_uses_source_only_ref
@@ -1649,11 +1634,11 @@ run_test 'update check fails open without a remote' test_update_check_fails_open
 run_test 'apply update fast-forwards and resynchronizes' test_apply_update_fast_forwards_and_resyncs
 run_test 'cloud bootstrap installs copies from a pinned ref' test_cloud_bootstrap_copies_pinned_content
 run_test 'cloud bootstrap installs pinned command shims' test_cloud_bootstrap_installs_command_shims
-run_test 'build materializes shared x-skill assets' test_build_materializes_shared_skill_assets
+run_test --fast 'build materializes shared x-skill assets' test_build_materializes_shared_skill_assets
 run_test 'xdh creates cycles and work items idempotently' test_xdh_creates_cycles_and_items_idempotently
 run_test 'xdh binds one work group to one branch and worktree' test_xdh_work_group_binds_branch_and_worktree
 run_test 'xdh fingerprints content, not time' test_xdh_fingerprint_tracks_content_not_time
-run_test 'x-review documents cross-model dispatch' test_x_review_documents_cross_model_dispatch
+run_test --fast 'x-review documents cross-model dispatch' test_x_review_documents_cross_model_dispatch
 run_test 'x-review artifact records reviewer provenance' test_x_review_artifact_records_reviewer_provenance
 run_test 'xdh housekeeping refuses unsafe removals' test_xdh_housekeeping_refuses_unsafe_removals
 run_test 'xdh closes a cycle into a tracked log' test_xdh_cycle_closes_into_a_tracked_log
@@ -1683,5 +1668,4 @@ run_test 'update state is namespaced per installation' test_update_state_is_name
 run_test 'cloud bootstrap never copies through managed symlinks' test_cloud_bootstrap_does_not_copy_through_managed_symlinks
 run_test 'cloud bootstrap v2 removes pinned v1 shims' test_cloud_bootstrap_v2_removes_pinned_v1_shims
 
-printf '\nRESULT: %d passed, %d failed\n' "$passed" "$failed"
-(( failed == 0 ))
+skill_x_test_finish 'integration'

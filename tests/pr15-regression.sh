@@ -6,12 +6,9 @@ TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/skill-x-pr15-tests.XXXXXX")
 trap 'rm -rf "$TEST_ROOT"' EXIT
 export SKILL_X_OPENCODE_VERSION=v1
 
-copy_project() {
-  local destination=$1
-  mkdir -p "$destination"
-  cp -a "$PROJECT_ROOT/." "$destination/"
-  rm -rf "$destination/.git" "$destination/commands" "$destination/opencode-commands"
-}
+# shellcheck source=lib/harness.sh
+source "$PROJECT_ROOT/tests/lib/harness.sh"
+skill_x_test_parse_args "$@"
 
 test_configured_canonical_dest_and_adapter_contract() {
   local project="$TEST_ROOT/target-contract"
@@ -197,12 +194,12 @@ EOF
   [[ $(cat "$home/.config/opencode/commands/user-command.md") == 'user owned' ]]
 }
 
-test_configured_canonical_dest_and_adapter_contract
-test_rejects_unsafe_artifact_destinations_without_damage
-test_custom_artifacts_are_gitignored
-test_destination_migration_removes_only_managed_links
-test_destination_migration_isolates_checkouts
-test_doctor_reads_canonical_consumers_from_metadata
-test_cloud_bootstrap_supports_legacy_pinned_ref
+run_test 'configured canonical dest and adapter contract' test_configured_canonical_dest_and_adapter_contract
+run_test 'unsafe artifact destinations are rejected without damage' test_rejects_unsafe_artifact_destinations_without_damage
+run_test 'custom artifact trees stay gitignored' test_custom_artifacts_are_gitignored
+run_test 'destination migration removes only managed links' test_destination_migration_removes_only_managed_links
+run_test 'destination migration isolates checkouts' test_destination_migration_isolates_checkouts
+run_test 'doctor reads canonical consumers from metadata' test_doctor_reads_canonical_consumers_from_metadata
+run_test 'cloud bootstrap supports a legacy pinned ref' test_cloud_bootstrap_supports_legacy_pinned_ref
 
-echo 'PR #15 regression tests: PASS'
+skill_x_test_finish 'pr15 regression'

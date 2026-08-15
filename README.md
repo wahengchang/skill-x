@@ -239,13 +239,16 @@ bin/cloud-bootstrap.sh <repo-url> <tag-or-commit>
 
 ## 測試
 
-本專案附有不需要網路、也不會改動真實家目錄的整合測試。測試會在暫存目錄建立本機 bare Git remote 與暫存 HOME，驗證 build、symlink、安裝 manifest、status 狀態、更新安全性、修復、移除保留行為與 pinned cloud copy：
+本專案附有不需要網路、也不會改動真實家目錄的整合測試。測試會在暫存目錄建立本機 bare Git remote 與暫存 HOME，驗證 build、symlink、安裝 manifest、status 狀態、更新安全性、修復、移除保留行為與 pinned cloud copy。測試分成兩組：
 
 ```bash
-make test
+make test        # 快速組：canonical build、artifact/shim 產生與冒煙測試
+make test-full   # 完整組：上面全部 + 生命週期、更新、cloud bootstrap、target adapter、xdh 回歸
 ```
 
-測試結束時應顯示 `RESULT: 49 passed, 0 failed`。這能驗證 shell 腳本與檔案行為；Claude Code、Codex CLI、OpenCode 是否實際發現技能，以及 AI 是否依照自然語言指示詢問，仍需分別在三個工具做端到端人工 smoke test：
+日常只改技能內容（`commands-src/`、`_shared/`）時跑 `make test` 就夠；改到 `bin/`、`tests/` 或任何腳本行為時請跑 `make test-full`（細節見 CONTRIBUTING.md）。兩組都會列出每個測試的耗時與最慢的前五名，單一測試超過 `SKILL_X_TEST_TIMEOUT`（預設 240 秒）會被中止並標成 `TIMEOUT` 失敗。
+
+`make test-full` 結束時應顯示三行 `RESULT ... 0 failed`（合計 62 個測試）。這能驗證 shell 腳本與檔案行為；Claude Code、Codex CLI、OpenCode 是否實際發現技能，以及 AI 是否依照自然語言指示詢問，仍需分別在三個工具做端到端人工 smoke test：
 
 1. 執行 `./install.sh` 與 `bin/skill-x doctor`，確認選定的技能路徑與 OpenCode command 區段皆為 `OK`。
 2. 重新啟動三個工具（skills 與 commands 在啟動時載入）。
@@ -254,4 +257,4 @@ make test
 5. OpenCode：輸入 `/example-skill`。v1 應看到它透過 `skill` 工具載入 canonical skill；v2 應只出現一個項目，沒有重複。
 6. 帶參數再試一次（例如 `/funny-text-rewriter 明天九點開會`），確認 `$ARGUMENTS` 有被轉送。
 
-測試腳本另外需要 [`ripgrep`](https://github.com/BurntSushi/ripgrep)（`rg` 指令）來比對輸出，執行 `make test` 前請確認已安裝（例如 `brew install ripgrep` 或 `apt install ripgrep`）。
+測試腳本另外需要 [`ripgrep`](https://github.com/BurntSushi/ripgrep)（`rg` 指令）來比對輸出，執行測試前請確認已安裝（例如 `brew install ripgrep` 或 `apt install ripgrep`）。

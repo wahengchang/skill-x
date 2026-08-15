@@ -42,7 +42,7 @@ mkdir -p commands-src/<skill-name>/scripts
 # 4. 重新產生部署版本
 bin/build.sh
 
-# 5. 跑一次整合測試，確認沒把 build/sync 腳本弄壞
+# 5. 跑一次快速測試，確認沒把 build/artifact 弄壞（純技能內容改動這樣就夠）
 make test
 
 # 6. 本機同步一次，實際用用看（可選但建議）
@@ -91,6 +91,21 @@ bin/build.sh
 
 代價是 `commands/` 底下會出現多份相同副本——那是 disposable artifact，跟注入的更新檢查標頭一樣，不需要 commit。
 
+### 測試：`make test`（快）vs. `make test-full`（全）
+
+測試分成兩組，差別只在「你改了什麼」，不是「你有多趕」：
+
+| 指令 | 內容 | 什麼時候用 |
+|---|---|---|
+| `make test`（等同 `make test-fast`） | `tests/run.sh --fast`：canonical build、header 注入、OpenCode shim 產生、共用資產 materialize、artifact gitignore 檢查、sync 冒煙測試、harness timeout 自檢 | **低風險改動**：只動 `commands-src/**/SKILL.md`、技能的支援檔、`_shared/update-check-header.md`、文件 |
+| `make test-full` | `tests/run.sh --full` + `tests/pr10-safety-regression.sh` + `tests/pr15-regression.sh`，共 61 個測試 | **其餘一律用這個**：動到 `bin/`（含 `bin/targets/`）、`tests/`、`install.sh`、`Makefile`，或任何影響 install/sync/update/uninstall 生命週期、Git 更新檢查、cloud bootstrap、target adapter、`xdh` 行為的改動 |
+
+不確定就跑 `make test-full`——它才是送出前的完整把關。
+
+兩組都會印出每個測試的耗時與最慢的前五名，方便日後定位變慢的案例；單一測試超過 `SKILL_X_TEST_TIMEOUT`（預設 240 秒）會被中止並標成 `TIMEOUT` 失敗，不會無限期卡住。要臨時縮短可用 `SKILL_X_TEST_TIMEOUT=60 make test-full`。
+
+兩組都不需要網路，也都在暫存 HOME 與暫存目錄裡跑，不會碰到你真正的 `~/.claude/skills`。
+
 ### 修改既有技能 / 修改共用的更新檢查邏輯
 
 - 改某顆技能：直接改 `commands-src/<name>/SKILL.md`，一樣跑 `bin/build.sh` + `make test` + commit 來源。
@@ -120,7 +135,8 @@ bin/build.sh
 - **commit 了 `commands/` 或 `opencode-commands/`**：它們是 `.gitignore` 的 disposable artifact；commit 它們只會讓之後的 `git status` 一直叫，或者在 build 之後產生無意義的 conflict。`git rm -r --cached` 清掉就好。
 - **改了 `commands-src/`，卻在本機直接跑 `bin/skill-x sync` 而沒先 build**：會同步舊 artifact；改用 `bin/skill-x install`，或先執行 `bin/build.sh`。
 - **`name:` 跟資料夾名不一致**：目前無自動檢查，純靠自律；建議寫的當下就對照一次。
-- **跑 `make test` 前沒裝 `ripgrep`**：測試腳本用 `rg` 做輸出比對，`brew install ripgrep` / `apt install ripgrep` 先裝好。
+- **跑測試前沒裝 `ripgrep`**：測試腳本用 `rg` 做輸出比對，`brew install ripgrep` / `apt install ripgrep` 先裝好。
+- **改了 `bin/` 或 `tests/` 卻只跑 `make test`**：快速組不含生命週期、更新、cloud bootstrap、target adapter 與 `xdh` 的覆蓋，這類改動一律要 `make test-full`。
 
 ---
 
@@ -130,5 +146,6 @@ bin/build.sh
 - [ ] 命名符合第 3 節規則（kebab-case、具體、必要時共用字首）
 - [ ] `description:` 講清楚做什麼 + 何時觸發
 - [ ] 跑過 `bin/build.sh`
-- [ ] 跑過 `make test`，全部 PASS
+- [ ] 跑過 `make test`（只改技能內容時），全部 PASS
+- [ ] 有動到 `bin/`、`tests/`、`install.sh` 或 `Makefile` 時，另外跑過 `make test-full`，全部 PASS
 - [ ] `git status` 沒有列出 `commands/` 或 `opencode-commands/` 的變動（它們是 gitignored artifact）
