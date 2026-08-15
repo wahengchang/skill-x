@@ -63,16 +63,18 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 | --- | --- |
 | `paths` / `init` | 以 `git rev-parse --git-common-dir` 從任一 linked worktree 解析回 main repo，建立 `.dev-hub` 骨架與 `.gitignore` |
 | `cycle new/list/show/check/close` | 建立或沿用 Cycle、關閉前檢查 gate、把完成 Cycle 壓成 `logs/` 短紀錄 |
-| `id next`、`item new`、`wg new`、`artifact new` | 在 `mkdir` 互斥鎖內同時配發 ID 與建立檔案，避免兩個 agent 拿到同一個編號 |
+| `id next`、`item new`、`wg new`、`artifact new` | 在 `mkdir` 互斥鎖內完成「檢查既有 → 配號 → 建檔」，避免兩個 agent 拿到同一個編號 |
 | `field get/set` | 以 atomic write 改寫單一 `- Field: value`，保留檔案其餘所有內容 |
 | `fingerprint [verify]` | 把整個工作狀態（含未 commit 變更）寫進暫時 index 並取得 tree，作為 review 目標 |
-| `pr status/upsert` | 有 `gh` 就 create-or-update 單一 PR，沒有就回報 `no-provider` 而不是假裝有 PR |
+| `pr status/upsert` | 以 head branch **與 head repository owner** 兩者定位 PR，create-or-update 單一 PR；沒有 `gh` 就回報 `no-provider` 而不是假裝有 PR |
 | `worktree`、`clean scan/apply` | 分類 SAFE / DIRTY / UNMERGED / ACTIVE / ORPHAN，只刪 SAFE，且刪前再檢查一次 |
 
-兩個設計選擇值得說明：
+四個設計選擇值得說明：
 
 - **Fingerprint 綁內容，不綁時間。** 用暫時 `GIT_INDEX_FILE` 做 `read-tree` + `add -A` + `write-tree`，得到的 tree 同時涵蓋已 commit 與未 commit 的內容，因此「把未 commit 的東西 commit 起來」不會改變 fingerprint，而任何一個字元的改動都會。快照前會先把 `.dev-hub/active|runtime|worktrees` 從暫時 index 移除，否則這個指令自己產生的暫存檔會讓結果不穩定。
-- **ID 配發與檔案建立同在鎖內。** `id next` 只是查詢；真正保證不重號的是 `item new` / `wg new` / `artifact new`，它們在同一個鎖裡掃描既有檔名與 `hub.md` 內容取最大值再建檔。重跑時同 slug 會直接沿用既有檔案（`X_ITEM_REUSED=yes`），不會在 `IS-001` 旁邊多出一個內容相同的 `IS-002`。
+- **「檢查既有」與「配號建檔」必須在同一個 critical section。** `id next` 只是查詢；真正保證不重號的是 `cycle new` / `item new` / `wg new` / `artifact new`——它們在同一個鎖裡完成「掃描是否已存在 → 取最大號 +1 → 寫檔（讓下一次掃描看得到）」。只鎖住配號、把寫檔留到鎖外，會讓兩個同時規劃的 agent 都掃到空目錄、都拿到 `WG-001`。`cycle new` 也要上鎖：目錄名帶到分鐘的時間戳，跨分鐘邊界的兩個併發呼叫會建出兩個同 slug 的 active Cycle，之後每一次 lookup 都變成 ambiguous。
+- **worktree 的「已註冊」不等於「可用」。** 目錄被手動刪掉時 `git worktree list` 仍會列出它。所以重用前要確認 `path/.git` 真的存在、而且 HEAD 就在預期的 branch 上；註冊是 stale 就 `git worktree prune` 後重建，路徑被無關內容佔用則直接停下來，不覆蓋。
+- **PR 不能只用 branch name 當 key。** branch 推到 fork 時，同一個 base repository 上可能有多個 fork 都開著叫 `fix` 的 PR。因此查詢會同時比對 `headRefName` 與 `headRepositoryOwner`（owner 由 push remote 的 URL 推得）；仍然分不出來時回報 `X_PR_STATE=ambiguous` 並拒絕更新，而不是賭一個把別人的 PR body 蓋掉。查詢用 `gh --jq` 輸出 TSV，比對留在 shell 字串比較，既避免手寫 JSON parser，也讓這段邏輯可以被測試。
 
 ### 更新檢查
 
@@ -122,9 +124,10 @@ tests/run.sh                   不需網路的整合測試
 5. **狀態無鎖（低）**：同時呼叫可能競爭寫入 timestamp，但個人使用影響有限。
 6. **跨機與三工具實測待補**：優先測 pull、拒絕/snooze、重新啟動後技能發現與 `/`、`$` 叫用。
 7. **OpenCode 版本判定是啟發式（中）**：只讀 `opencode --version` 的主版號，偵測不到時回退 v1。同一台機器裝多個 OpenCode 版本或版本字串改格式時，須用 `SKILL_X_OPENCODE_VERSION` 明確指定。
-8. **`xdh pr` 只支援 GitHub `gh`（中）**：沒有 `gh` 時回報 `X_PR_PROVIDER=none`，由技能改成輸出手動建立 PR 的指示。要支援 GitLab 等平台需再加一個 provider 分支。
+8. **`xdh pr` 只支援 GitHub `gh`（中）**：沒有 `gh` 時回報 `X_PR_PROVIDER=none`，由技能改成輸出手動建立 PR 的指示。要支援 GitLab 等平台需再加一個 provider 分支。head owner 由 push remote URL 推得，若 remote 未設定則退回只比對 branch name，此時多筆相符會回報 `ambiguous` 而不是任選一筆。
 9. **獨立 Reviewer 由 host 決定（中）**：`x-review` 要求另一個 Agent，但能否真的啟動獨立 Agent 取決於當下工具。無法啟動時規定回報 `BLOCKED_NO_INDEPENDENT_REVIEWER`，這條是靠指示而非機制保證的。
 10. **`.dev-hub` 沿用者的既有 `.gitignore`（低）**：`xdh` 只在缺少時附加三行，不會移除使用者自己寫的規則；若使用者手動刪掉這些行，Cycle 內容可能被誤 commit。
+11. **鎖是同機器內的（低）**：`x_lock` 用 `mkdir` 互斥，只保護同一台機器上的併發 agent。若 `.dev-hub` 放在多台機器共掛的網路檔案系統上，`mkdir` 的原子性不再保證。超過兩分鐘未釋放的鎖會被視為死行程留下的而清除。
 
 ## 未採用方案
 

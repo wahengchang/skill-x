@@ -39,7 +39,13 @@ x_wg_new() {
   fi
   mkdir -p "$target_dir"
 
-  local id file existing found=no
+  # Reservation is one critical section: the "does a WG for this slug already
+  # exist?" scan, the number allocation, and the write that makes the number
+  # visible to the next scan all happen under the same lock. Splitting them
+  # lets two agents planning at the same moment both observe an empty
+  # work-groups/ and both claim WG-001.
+  local id file existing found=no lower branch worktree
+  x_lock "$cycle_dir/.xdh-id.lock"
   for existing in "$target_dir/WG-"*"-$slug.md"; do
     if [[ -f $existing ]]; then
       id=$(basename -- "$existing" | cut -d- -f1,2)
@@ -48,20 +54,18 @@ x_wg_new() {
       break
     fi
   done
-  if [[ $found == no ]]; then
-    x_lock "$cycle_dir/.xdh-id.lock"
+
+  if [[ $found == yes ]]; then
+    # An existing WG owns its branch and worktree names; never recompute them,
+    # because a recomputed stamp can differ from the one already recorded.
+    branch=$(x_field_get "$file" Branch | tr -d '`')
+    worktree=$(x_field_get "$file" Worktree | tr -d '`')
+  else
     id=$(x_id_next WG "$cycle_dir")
     file="$target_dir/$id-$slug.md"
-    x_unlock
-  fi
-
-  local lower; lower=$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')
-  local branch="x/$stamp-$lower-$slug"
-  local worktree="$X_WORKTREES/$stamp-$id-$slug"
-
-  x_worktree_ensure "$branch" "$worktree" "$from"
-
-  if [[ $found == no ]]; then
+    lower=$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')
+    branch="x/$stamp-$lower-$slug"
+    worktree="$X_WORKTREES/$stamp-$id-$slug"
     x_render_template "$(x_template work-group)" \
       ID "$id" \
       TITLE "${title:-$slug}" \
@@ -73,6 +77,12 @@ x_wg_new() {
       CREATED "$(x_now_iso)" \
       | x_atomic_write "$file"
   fi
+  x_unlock
+
+  # The worktree is created outside the lock: it is slow, and it is derived
+  # from the reservation rather than part of it. A failure here leaves the
+  # reservation intact, so re-running finishes the job instead of renumbering.
+  x_worktree_ensure "$branch" "$worktree" "$from"
 
   x_emit X_WG_ID "$id"
   x_emit X_WG_FILE "$file"
@@ -82,16 +92,31 @@ x_wg_new() {
   x_emit X_WG_REUSED "$found"
 }
 
+x_worktree_registered() {
+  git -C "$X_MAIN_ROOT" worktree list --porcelain | grep -Fxq "worktree $1"
+}
+
 x_worktree_ensure() {
   local branch=$1 path=$2 from=$3
   x_resolve_paths
 
-  # An existing registration for this exact path is authoritative — adopting it
-  # keeps re-runs from failing on "already exists".
-  if git -C "$X_MAIN_ROOT" worktree list --porcelain |
-     grep -Fxq "worktree $path"; then
-    x_emit X_WORKTREE_CREATED no
-    return 0
+  if x_worktree_registered "$path"; then
+    # Registration alone is not proof that the worktree is usable: the
+    # directory may have been deleted by hand, leaving metadata that keeps
+    # `worktree add` failing while every re-run happily reports "reused".
+    if [[ -e $path/.git ]]; then
+      local actual
+      actual=$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null || printf '')
+      [[ $actual == "$branch" ]] ||
+        x_die "worktree $path is on branch '${actual:-unknown}', expected '$branch'"
+      x_emit X_WORKTREE_CREATED no
+      return 0
+    fi
+    git -C "$X_MAIN_ROOT" worktree prune >/dev/null 2>&1 || true
+    if x_worktree_registered "$path"; then
+      x_die "stale worktree registration for $path could not be pruned"
+    fi
+    x_emit X_WORKTREE_PRUNED yes
   fi
 
   if [[ -e $path ]]; then

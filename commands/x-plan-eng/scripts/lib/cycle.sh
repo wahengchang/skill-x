@@ -72,14 +72,15 @@ x_cycle_new() {
   x_ensure_gitignore >/dev/null
 
   # Re-running discovery over the same scope updates the existing Cycle instead
-  # of forking a second one.
+  # of forking a second one. Lookup and creation are locked together: the
+  # directory name carries a minute-resolution stamp, so two unsynchronised
+  # runs that straddle a minute boundary would otherwise create two active
+  # Cycles for one scope and make every later lookup ambiguous.
   local dir reused=yes
+  x_lock "$X_DEV_HUB/.xdh-cycle.lock"
   if ! dir=$(x_cycle_dir_for_slug "$slug"); then
     reused=no
     dir="$X_ACTIVE/cycle-$(x_stamp)-$slug"
-    mkdir -p "$dir/work-items" "$dir/work-groups" \
-             "$dir/artifacts/discovery" "$dir/artifacts/reviews" "$dir/artifacts/debug" \
-             "$dir/tmp"
   fi
   mkdir -p "$dir/work-items" "$dir/work-groups" \
            "$dir/artifacts/discovery" "$dir/artifacts/reviews" "$dir/artifacts/debug" \
@@ -95,6 +96,7 @@ x_cycle_new() {
       SOURCE_PROMPT "${prompt:-<summary or reference>}" \
       | x_atomic_write "$dir/hub.md"
   fi
+  x_unlock
 
   x_emit X_CYCLE "$name"
   x_emit X_CYCLE_DIR "$dir"
@@ -165,34 +167,37 @@ x_item_new() {
   mkdir -p "$target_dir"
 
   # Re-running planning for the same work must not create IS-002 next to an
-  # identical IS-001, so an existing file with this type and slug wins.
-  local existing
+  # identical IS-001. The reuse scan, the allocation, and the write share one
+  # critical section — scanning outside the lock lets two concurrent agents
+  # both conclude "nothing exists yet" and then create two items for one job.
+  local existing id file reused=no
+  x_lock "$scope_dir/.xdh-id.lock"
   for existing in "$target_dir/$kind-"*"-$slug.md"; do
     if [[ -f $existing ]]; then
-      x_emit X_ITEM_ID "$(basename -- "$existing" | cut -d- -f1,2)"
-      x_emit X_ITEM_FILE "$existing"
-      x_emit X_ITEM_REUSED yes
-      return 0
+      id=$(basename -- "$existing" | cut -d- -f1,2)
+      file=$existing
+      reused=yes
+      break
     fi
   done
-
-  x_lock "$scope_dir/.xdh-id.lock"
-  local id; id=$(x_id_next "$kind" "$scope_dir")
-  local file="$target_dir/$id-$slug.md"
-  x_render_template "$template" \
-    ID "$id" \
-    TITLE "${title:-$slug}" \
-    PRIORITY "$priority" \
-    OWNER "$owner" \
-    WG "$wg" \
-    SOURCE "$source" \
-    CREATED "$(x_now_iso)" \
-    | x_atomic_write "$file"
+  if [[ $reused == no ]]; then
+    id=$(x_id_next "$kind" "$scope_dir")
+    file="$target_dir/$id-$slug.md"
+    x_render_template "$template" \
+      ID "$id" \
+      TITLE "${title:-$slug}" \
+      PRIORITY "$priority" \
+      OWNER "$owner" \
+      WG "$wg" \
+      SOURCE "$source" \
+      CREATED "$(x_now_iso)" \
+      | x_atomic_write "$file"
+  fi
   x_unlock
 
   x_emit X_ITEM_ID "$id"
   x_emit X_ITEM_FILE "$file"
-  x_emit X_ITEM_REUSED no
+  x_emit X_ITEM_REUSED "$reused"
 }
 
 # Allocate an artifact ID and file (RV under artifacts/reviews, DBG under

@@ -157,7 +157,10 @@ x_field_get() {
 x_field_set() {
   local file=$1 name=$2 value=$3 tmp
   [[ -f $file ]] || x_die "no such file: $file"
-  tmp=$(mktemp "${TMPDIR:-/tmp}/xdh-field.XXXXXX")
+  # Staged next to the target, never in a shared /tmp: every byte this helper
+  # writes has to stay inside the project, and awk's exit status has to be
+  # known before anything replaces the original.
+  tmp=$(mktemp "$(dirname -- "$file")/.xdh-field.XXXXXX")
   awk -v name="$name" -v value="$value" '
     BEGIN { done = 0 }
     { sub(/\r$/, "") }
