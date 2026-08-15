@@ -389,6 +389,197 @@ test_cloud_bootstrap_installs_command_shims() {
   [[ -f "$home_v2/.config/opencode/skills/example-skill/SKILL.md" ]]
 }
 
+X_SKILLS=(x-discovery x-plan-eng x-review x-debug x-ship x-housekeeping)
+
+test_build_materializes_shared_skill_assets() {
+  local project="$TEST_ROOT/x-assets"
+  copy_project "$project"
+  "$project/bin/build.sh" >/dev/null
+
+  local skill
+  for skill in "${X_SKILLS[@]}"; do
+    # The source tree shares one copy through a symlink; the deployment must
+    # contain real files, because each skill is synced to the tools on its own.
+    [[ -L "$project/commands-src/$skill/scripts" ]]
+    [[ ! -L "$project/commands/$skill/scripts" ]]
+    [[ -x "$project/commands/$skill/scripts/xdh" ]]
+    [[ -f "$project/commands/$skill/scripts/lib/common.sh" ]]
+    [[ -f "$project/commands/$skill/templates/issue.md" ]]
+    cmp "$project/commands-src/_x-shared/scripts/xdh" "$project/commands/$skill/scripts/xdh"
+  done
+
+  # The shared source directory is not itself a skill.
+  [[ ! -e "$project/commands/_x-shared" ]]
+  [[ ! -e "$project/opencode-commands/_x-shared.md" ]]
+}
+
+# Build the project, then hand back a throwaway Git repository plus the path to
+# the *deployed* xdh — the exact file a synced tool would execute.
+make_xdh_fixture() {
+  local project=$1 repo=$2
+  copy_project "$project"
+  "$project/bin/build.sh" >/dev/null
+  mkdir -p "$repo"
+  git init -q -b main "$repo"
+  git -C "$repo" config user.email test@example.invalid
+  git -C "$repo" config user.name 'Test Runner'
+  echo seed > "$repo/seed.txt"
+  git -C "$repo" add -A
+  git -C "$repo" commit -qm initial
+}
+
+test_xdh_creates_cycles_and_items_idempotently() {
+  local project="$TEST_ROOT/xdh-cycle" repo="$TEST_ROOT/xdh-cycle-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-discovery/scripts/xdh"
+
+  local first second
+  first=$(cd "$repo" && "$xdh" cycle new --slug 'Login Flow!!' --title 'Login flow')
+  rg -q '^X_CYCLE=cycle-[0-9]{8}-[0-9]{4}-login-flow$' <<<"$first"
+  rg -q '^X_CYCLE_REUSED=no$' <<<"$first"
+
+  # A second discovery pass over the same scope updates the Cycle in place.
+  second=$(cd "$repo" && "$xdh" cycle new --slug login-flow)
+  rg -q '^X_CYCLE_REUSED=yes$' <<<"$second"
+  [[ $(rg '^X_CYCLE=' <<<"$first") == "$(rg '^X_CYCLE=' <<<"$second")" ]]
+  [[ $(find "$repo/.dev-hub/active" -mindepth 1 -maxdepth 1 -type d | wc -l) -eq 1 ]]
+
+  # Runtime state is ignored; the cycle log directory is not.
+  rg -qx '\.dev-hub/active/' "$repo/.gitignore"
+  rg -qx '\.dev-hub/runtime/' "$repo/.gitignore"
+  ! rg -q 'logs' "$repo/.gitignore"
+
+  # IDs increment across kinds and never collide; re-planning reuses the file.
+  (cd "$repo" && "$xdh" item new --type issue --slug session-timeout >/dev/null)
+  (cd "$repo" && "$xdh" item new --type spike --slug token-store >/dev/null)
+  local again
+  again=$(cd "$repo" && "$xdh" item new --type issue --slug session-timeout --title Ignored)
+  rg -q '^X_ITEM_ID=IS-001$' <<<"$again"
+  rg -q '^X_ITEM_REUSED=yes$' <<<"$again"
+  rg -q '^X_NEXT_ID=IS-002$' <<<"$(cd "$repo" && "$xdh" id next --kind IS)"
+  rg -q '^X_NEXT_ID=SP-002$' <<<"$(cd "$repo" && "$xdh" id next --kind SP)"
+}
+
+test_xdh_work_group_binds_branch_and_worktree() {
+  local project="$TEST_ROOT/xdh-wg" repo="$TEST_ROOT/xdh-wg-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-plan-eng/scripts/xdh"
+
+  (cd "$repo" && "$xdh" cycle new --slug auth >/dev/null)
+  local first second worktree
+  first=$(cd "$repo" && "$xdh" wg new --slug login --items IS-001)
+  rg -q '^X_WG_ID=WG-001$' <<<"$first"
+  rg -q '^X_WG_BRANCH=x/[0-9]{8}-[0-9]{4}-wg-001-login$' <<<"$first"
+  worktree=$(rg -N --replace '$1' '^X_WG_WORKTREE=(.*)$' <<<"$first")
+  [[ -d $worktree ]]
+
+  second=$(cd "$repo" && "$xdh" wg new --slug login)
+  rg -q '^X_WG_REUSED=yes$' <<<"$second"
+  rg -q '^X_WORKTREE_CREATED=no$' <<<"$second"
+  [[ $(git -C "$repo" worktree list | wc -l) -eq 2 ]]
+  [[ $(git -C "$repo" branch --list 'x/*' | wc -l) -eq 1 ]]
+
+  # A skill invoked inside the linked worktree must still find the shared hub.
+  local from_worktree
+  from_worktree=$(cd "$worktree" && "$xdh" paths)
+  rg -qx "X_MAIN_ROOT=$repo" <<<"$from_worktree"
+  rg -qx "X_DEV_HUB=$repo/.dev-hub" <<<"$from_worktree"
+  rg -qx "X_CURRENT_ROOT=$worktree" <<<"$from_worktree"
+}
+
+test_xdh_fingerprint_tracks_content_not_time() {
+  local project="$TEST_ROOT/xdh-fp" repo="$TEST_ROOT/xdh-fp-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-review/scripts/xdh"
+
+  git -C "$repo" checkout -q -b feature
+  echo change > "$repo/seed.txt"
+  local fp
+  fp=$(cd "$repo" && "$xdh" fingerprint --base main | rg -N --replace '$1' '^X_FINGERPRINT=(.*)$')
+  [[ -n $fp ]]
+
+  # Uncommitted work counts as content: committing it must not move the target.
+  git -C "$repo" add -A
+  git -C "$repo" commit -qm 'feat: change'
+  rg -q '^X_REVIEW_FRESHNESS=FRESH$' \
+    <<<"$(cd "$repo" && "$xdh" fingerprint verify --expect "$fp" --base main)"
+
+  # Any later edit invalidates the approval.
+  echo more >> "$repo/seed.txt"
+  if (cd "$repo" && "$xdh" fingerprint verify --expect "$fp" --base main >"$project/verify.out" 2>&1); then
+    return 1
+  fi
+  rg -q '^X_REVIEW_FRESHNESS=STALE$' "$project/verify.out"
+}
+
+test_xdh_housekeeping_refuses_unsafe_removals() {
+  local project="$TEST_ROOT/xdh-clean" repo="$TEST_ROOT/xdh-clean-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-housekeeping/scripts/xdh"
+
+  (cd "$repo" && "$xdh" cycle new --slug cleanup >/dev/null)
+  local worktree
+  worktree=$(cd "$repo" && "$xdh" wg new --slug widget |
+             rg -N --replace '$1' '^X_WG_WORKTREE=(.*)$')
+
+  # 1. Uncommitted work is never destroyed.
+  echo scratch > "$worktree/scratch.txt"
+  rg -q '^ITEM DIRTY worktree ' <<<"$(cd "$repo" && "$xdh" clean scan)"
+  (cd "$repo" && "$xdh" clean apply >/dev/null)
+  [[ -d $worktree ]]
+  [[ -f $worktree/scratch.txt ]]
+
+  # 2. Committed but unintegrated work is never destroyed either.
+  git -C "$worktree" add -A
+  git -C "$worktree" commit -qm 'feat: widget'
+  rg -q '^ITEM UNMERGED worktree ' <<<"$(cd "$repo" && "$xdh" clean scan)"
+  (cd "$repo" && "$xdh" clean apply >/dev/null)
+  [[ -d $worktree ]]
+
+  # 3. Once merged, the worktree and then the branch become removable.
+  git -C "$repo" merge -q --no-ff -m 'merge widget' \
+    "$(git -C "$worktree" rev-parse --abbrev-ref HEAD)"
+  rg -q '^ITEM SAFE worktree ' <<<"$(cd "$repo" && "$xdh" clean scan)"
+  (cd "$repo" && "$xdh" clean apply >/dev/null)
+  [[ ! -d $worktree ]]
+  (cd "$repo" && "$xdh" clean apply >/dev/null)
+  [[ -z $(git -C "$repo" branch --list 'x/*') ]]
+}
+
+test_xdh_cycle_closes_into_a_tracked_log() {
+  local project="$TEST_ROOT/xdh-close" repo="$TEST_ROOT/xdh-close-repo"
+  make_xdh_fixture "$project" "$repo"
+  local xdh="$project/commands/x-housekeeping/scripts/xdh"
+
+  local cycle
+  cycle=$(cd "$repo" && "$xdh" cycle new --slug release |
+          rg -N --replace '$1' '^X_CYCLE=(.*)$')
+  (cd "$repo" && "$xdh" item new --type issue --slug alpha >/dev/null)
+  (cd "$repo" && "$xdh" item new --type issue --slug beta >/dev/null)
+
+  # An unfinished item blocks closure and the Cycle survives.
+  if (cd "$repo" && "$xdh" cycle close --cycle "$cycle" --summary x >"$project/close.out" 2>&1); then
+    return 1
+  fi
+  rg -q '^BLOCKER work-item IS-001-alpha\.md status=draft$' "$project/close.out"
+  [[ -d "$repo/.dev-hub/active/$cycle" ]]
+
+  local f
+  for f in "$repo/.dev-hub/active/$cycle"/work-items/*.md; do
+    (cd "$repo" && "$xdh" field set "$f" Status done >/dev/null)
+  done
+  (cd "$repo" && "$xdh" cycle close --cycle "$cycle" \
+     --summary 'Shipped alpha and beta.' --decisions 'Kept the old store.' >/dev/null)
+
+  [[ ! -d "$repo/.dev-hub/active/$cycle" ]]
+  rg -q '^\*\*Summary:\*\* Shipped alpha and beta\.$' "$repo/.dev-hub/logs/$cycle.md"
+  rg -q '^- Work items: IS-001-alpha, IS-002-beta$' "$repo/.dev-hub/logs/$cycle.md"
+
+  # The log is the part that must survive in Git.
+  git -C "$repo" add -A
+  rg -qx "\.dev-hub/logs/$cycle.md" <<<"$(git -C "$repo" diff --cached --name-only)"
+}
+
 run_test 'build injects once and copies support files' test_build_injects_header_and_support_files
 run_test 'invalid build preserves previous deployment' test_build_rejects_invalid_frontmatter_without_destroying_output
 run_test 'build accepts crlf frontmatter' test_build_accepts_crlf_frontmatter
@@ -404,6 +595,12 @@ run_test 'update check fails open without a remote' test_update_check_fails_open
 run_test 'apply update fast-forwards and resynchronizes' test_apply_update_fast_forwards_and_resyncs
 run_test 'cloud bootstrap installs copies from a pinned ref' test_cloud_bootstrap_copies_pinned_content
 run_test 'cloud bootstrap installs pinned command shims' test_cloud_bootstrap_installs_command_shims
+run_test 'build materializes shared x-skill assets' test_build_materializes_shared_skill_assets
+run_test 'xdh creates cycles and work items idempotently' test_xdh_creates_cycles_and_items_idempotently
+run_test 'xdh binds one work group to one branch and worktree' test_xdh_work_group_binds_branch_and_worktree
+run_test 'xdh fingerprints content, not time' test_xdh_fingerprint_tracks_content_not_time
+run_test 'xdh housekeeping refuses unsafe removals' test_xdh_housekeeping_refuses_unsafe_removals
+run_test 'xdh closes a cycle into a tracked log' test_xdh_cycle_closes_into_a_tracked_log
 
 printf '\nRESULT: %d passed, %d failed\n' "$passed" "$failed"
 (( failed == 0 ))
