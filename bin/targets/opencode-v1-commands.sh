@@ -9,8 +9,8 @@
 # adapter removes only skill-x-managed shims and preserves user-owned commands.
 #
 # Actions:
-#   build   $1=commands-src root  $2=staging artifact directory
-#           Generates <name>.md shim files from canonical skills.
+#   build   $1=canonical staging root  $2=staging artifact directory
+#           Generates <name>.md shim files from fully processed canonical skills.
 #   sync    $1=artifact directory
 #           Symlinks generated shims into user's OpenCode commands dir.
 #   bootstrap $1=artifact directory
