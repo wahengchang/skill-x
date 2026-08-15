@@ -24,7 +24,7 @@ bin/targets/  ───┘          │      └─> opencode-commands/ (gitigno
 | **build input** | 受版本控制的來源：`commands-src/`、`_shared/`、與 `bin/`（包含 `bin/targets/`）。 |
 | **generated artifact** | `bin/build.sh` 產生的 disposable artifact tree，列在 `.gitignore`。`commands/`、`opencode-commands/`，以及未來任何新增的 transform 產物。 |
 | **canonical-format consumer** | 直接讀取 `commands/<name>/SKILL.md` 不需轉換的 runtime；由 `CANONICAL_CONSUMERS` 描述。 |
-| **transform adapter** | 把 canonical skill 轉成另一個 runtime 需要的 wire format 的腳本，位於 `bin/targets/<adapter>.sh`。 |
+| **transform adapter** | 把 common build 完成後的 canonical artifact 轉成另一個 runtime 需要的 wire format 的腳本，位於 `bin/targets/<adapter>.sh`。 |
 | **sync / distribute** | `bin/sync-skills.sh` 與 `bin/cloud-bootstrap.sh` 負責把 build 出的 artifact 部署到目標路徑；它們不是 build pipeline 的一部分。 |
 | **command shim** | 產生於 `opencode-commands/<name>.md` 的薄層 command 檔，只為 OpenCode v1 補上 `/<name>`；它叫 OpenCode 用 `skill` 工具載入 canonical skill，不含技能內容。 |
 
@@ -51,16 +51,16 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 
 `bin/build.sh` 從 `bin/targets/targets.conf` 讀取 canonical 目的地與 target 註冊資料，並驗證所有 adapter 腳本都已宣告（反之亦然）。接著：
 
-1. **Common canonical build**：掃描 `commands-src/`，對每顆技能的 `SKILL.md` 注入 `_shared/update-check-header.md`、保留 support 檔，輸出到 `$CANONICAL_DEST`（預設 `commands/`）。
-2. **Transform adapters**：依序執行 `bin/targets/<adapter>.sh "$SRC" "$staging"`；adapter 把 canonical source 轉成該 runtime 需要的表示（例如 OpenCode v1 的 command shim），輸出到自己的 artifact 目錄。
+1. **Common canonical build**：掃描 `commands-src/`，對每顆技能的 `SKILL.md` 注入 `_shared/update-check-header.md`、保留 support 檔，輸出到 `$CANONICAL_DEST`（預設 `commands/`）的 staging tree。
+2. **Transform adapters**：依序執行 `bin/targets/<adapter>.sh build "$canonical_tmp" "$staging"`；adapter 收到的是 common build 完成後的 canonical staging artifact，而不是 raw `commands-src/`，因此 header injection 與 support-file materialization 只維護一份。adapter 再把 canonical artifact 轉成該 runtime 需要的表示（例如 OpenCode v1 的 command shim），輸出到自己的 artifact 目錄。
 
-所有輸出都先寫到 `mktemp` 暫存樹，全部建置成功後才逐棵以 `mv` 替換最終 artifact 目錄，所以消費者不會看到任一目錄的半成品。生成的 `commands/`、`opencode-commands/`，以及未來任何 transform artifact，都列在 `.gitignore`，正常 commit 不會把它們送進 repository。
+adapter 的 action contract 固定為：`build <canonical-staging-dir> <artifact-staging-dir>`、`sync <artifact-dir>`、`bootstrap <artifact-dir>`。所有輸出都先寫到 `mktemp` 暫存樹，全部建置成功後才逐棵以 `mv` 替換最終 artifact 目錄，所以消費者不會看到任一目錄的半成品。生成的 `commands/`、`opencode-commands/`，以及未來任何 transform artifact，都列在 `.gitignore`，正常 commit 不會把它們送進 repository。
 
 ### Target metadata
 
 `bin/targets/targets.conf` 是 build 與 bootstrap 之間的合約：
 
-- `CANONICAL_DEST`：canonical artifact 目錄（目前 `commands`）。
+- `CANONICAL_DEST`：canonical artifact 目錄（目前 `commands`）；build、sync 與 bootstrap 都必須從這個值取得 canonical tree，不得另外 hardcode `commands/`。
 - `CANONICAL_CONSUMERS`：直接讀 SKILL.md 的 runtime 與其部署路徑，例如 `claude-code:~/.claude/skills`。bootstrap 用這份清單決定要把 canonical artifact 拷貝到哪裡。
 - `TRANSFORMED_TARGETS`：需要 adapter 的 target，格式 `<adapter-script-stem>:<artifact-directory-under-repo-root>`。bootstrap 看到這份清單才把 transform 產物拷貝給有需要的 runtime。
 
@@ -110,11 +110,11 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 
 ### 同步路徑
 
-`bin/sync-skills.sh` sources `targets.conf` to derive canonical consumer destinations from `CANONICAL_CONSUMERS` and invokes each transform adapter's `sync` action. Transform adapters (e.g., `opencode-v1-commands`) handle OpenCode v1/v2 shim lifecycle: v1 installs symlinks to command shims, v2 removes managed shims while preserving user-owned command files.遇到同名非 symlink 內容只警告而不覆寫。
+`bin/sync-skills.sh` sources `targets.conf` to derive `$CANONICAL_DEST` and canonical consumer destinations from `CANONICAL_CONSUMERS`, then invokes each transform adapter's `sync` action. Transform adapters (e.g., `opencode-v1-commands`) handle OpenCode v1/v2 shim lifecycle: v1 installs symlinks to command shims, v2 removes managed shims while preserving user-owned command files.遇到同名非 symlink 內容只警告而不覆寫。
 
 ### 容器部署
 
-`bin/cloud-bootstrap.sh` 接受 repo URL 與 ref，先 clone 到暫存目錄、checkout 指定 ref、**就地跑 `bin/build.sh`** 產出 artifact，然後照 `CANONICAL_CONSUMERS` 把 canonical artifact 拷貝到各目標，最後依 OpenCode 版本由各 transform adapter 的 `bootstrap` action 決定要不要拷貝 transform 產物。認證由 image builder 的 SSH agent/secret 負責，避免 token 進入參數、log 或 image layer。部署後只有技能副本，沒有 repository 腳本，因此嵌入的本地更新檢查自然無法執行且必須靜默繼續。
+`bin/cloud-bootstrap.sh` 接受 repo URL 與 ref，先 clone 到暫存目錄、checkout 指定 ref、**就地跑該 ref 的 `bin/build.sh`** 產出 artifact。新版 ref 會照 `CANONICAL_CONSUMERS` 把 canonical artifact 拷貝到各目標，再由 transform adapter 的 `bootstrap` action 決定 transform 產物；若 pinned ref 早於 target registry、沒有 `bin/targets/targets.conf`，則自動回退到歷史 `commands/` + `opencode-commands/` layout，保持舊 pin 可重建。認證由 image builder 的 SSH agent/secret 負責，避免 token 進入參數、log 或 image layer。部署後只有技能副本，沒有 repository 腳本，因此嵌入的本地更新檢查自然無法執行且必須靜默繼續。
 
 ## 目錄
 
@@ -137,6 +137,7 @@ opencode-commands/             build 產生的 OpenCode v1 command shim（.gitig
 .codex/skills/canonicalize-skill/ Codex 建置環境專用的 raw skill authoring tool（不分發）
 install.sh                     安裝入口（build 再 sync）
 tests/run.sh                   不需網路的整合測試
+tests/pr15-regression.sh       target contract 與 legacy pinned-ref regression tests
 ```
 
 ## 已知限制與優先驗證
