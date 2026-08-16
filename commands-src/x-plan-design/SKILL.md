@@ -48,6 +48,11 @@ done
 
 The facet contract this skill follows is bundled at `references/facet-contract.md`.
 
+Every `<item>` below is the item's **file path** under `.dev-hub/`, normally the
+path handed over by `x-plan` as `X_ITEM_FILE`; never substitute only `IS-001` or
+`SP-001`. In Facet mode use the planning fingerprint handed over by the
+orchestrator and confirm it with `xdh plan fingerprint <item>`.
+
 ## Capability ladder
 
 Detect **Image Generate**, **Image Display**, and **Image Compare** independently.
@@ -117,21 +122,35 @@ completed@<fp> | deferred-owner@<fp> | deferred-missing@<fp>`. Completion
 records `completed@<current fingerprint>`; the fingerprint is reported by the
 read-only `xdh plan fingerprint <item>`.
 
+The two deferred values are Owner-sanctioned exceptions, never shortcuts past
+work Design could have completed. `plan check` accepts a Design deferral only
+when a Design Owner Decision is accepted at the same fingerprint; otherwise it
+fails with `facet=design status=deferred-unaccepted`. Any status carrying an old
+fingerprint is stale.
+
 The `## Design Facet` section must capture the resolved UX structure and states,
 design-system reuse, responsive/accessibility constraints, capability ladder,
 variant/comparison evidence when applicable, and the selected/recommended
 direction. A screenshot alone is not sufficient evidence.
 
-A missing Image Generate / Display / Compare capability downgrades the method
-rather than blocks it. The facet blocks only when a material UX decision cannot
-be resolved from evidence and a later Owner response cannot currently be
-obtained; otherwise ask clearly, record the pending decision, and stop this turn.
+Facet-mode design artifacts use the same `xdh design prepare` call as Direct
+mode, with all three capability values explicit and `--fingerprint` set to the
+current planning fingerprint. Same-fingerprint artifacts are reused rather than
+silently regenerated.
 
-If an Owner decision changes a fingerprinted canonical behavior or scope input,
-return control to `x-plan` so the orchestrator can apply the accepted canonical
-edit, recompute the fingerprint, accept the decision at the new fingerprint,
-and re-dispatch affected facets. Design does not rewrite canonical fingerprint
-inputs in Facet mode.
+A missing Image Generate / Display / Compare capability downgrades the method
+rather than blocks it. If a material UX choice needs the Owner, Design records
+`blocked` and returns a numbered decision brief with question, recommended
+answer, and consequences. Design does **not** insert the Owner Decision row;
+`x-plan` owns that row for non-Product facets.
+
+If the Owner answer changes a fingerprinted canonical behavior or scope input,
+`x-plan` applies that canonical edit while the decision is still pending,
+recomputes the fingerprint, accepts the same pending OD ID at the new
+fingerprint, and re-dispatches affected facets. Design does not rewrite canonical
+fingerprint inputs in Facet mode. If an already-accepted decision later becomes
+stale, do not invent a second OD ID as if that removed the old stale row; return
+the machine-layer blocker to `x-plan`.
 
 This facet must never create an item (`item new`), create a Work Group
 (`wg new`), create a worktree or branch, run the generic `field set`, or run
