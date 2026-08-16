@@ -1,18 +1,20 @@
 ---
 name: x-plan
-description: Orchestrate the planning lifecycle for registered work — resolve one scope and target, route each item through the Product → Design → DevEx → Engineering facets (Engineering mandatory, always last), and produce execution-ready Issues and Spikes bound to a deterministic planning fingerprint; use when work needs to be planned to executable depth, either from a discovery hub.md or as a single standalone requirement.
+description: Orchestrate the planning lifecycle for registered work — resolve one scope and target, select the applicable Product / Design / DevEx facets, always finish with Engineering, and produce execution-ready Issues and Spikes bound to a deterministic planning fingerprint; use when work needs to be planned to executable depth, either from a discovery hub.md or as a single standalone requirement.
 ---
 
 # x-plan
 
-Turn work that is merely *named* into execution-ready Issues and Spikes by
-routing each item through the four planning facets in order — Product, Design,
-DevEx, and Engineering (Engineering always last, always mandatory) — and gating
-the result behind a deterministic planning fingerprint.
+Turn work that is merely *named* into execution-ready Issues and Spikes. Select
+only the planning facets that actually apply, run them in the fixed order
+Product → Design → DevEx → Engineering, and gate the result behind a
+deterministic planning fingerprint. Engineering is always last and always
+mandatory.
 
-`x-plan` orchestrates. It does not itself perform facet work: it resolves scope
-and target, dispatches the specialist skills, and runs the machine gates. This
-skill does not write product code and does not perform the final review.
+`x-plan` orchestrates. It does not itself perform specialist reasoning: it
+resolves scope and target, selects the route, dispatches specialists, applies
+Owner-approved changes to canonical planning inputs, and runs the machine gates.
+This skill does not write product code and does not perform the final review.
 
 ## When to use
 
@@ -23,6 +25,13 @@ skill does not write product code and does not perform the final review.
 
 The universal contract — prompt, project background, repository documents,
 source code and Git state — plus the discovery `hub.md` when one exists.
+
+Before asking the Owner anything, inspect the prompt, repository guidance,
+existing plan, `hub.md`, existing Owner Decisions, and relevant code/config/test
+evidence. Ask only when the answer cannot be established from evidence and would
+change the route, scope, user-visible behavior, priority, or an irreversible
+choice. For dependent questions, ask one at a time and include a recommended
+answer.
 
 ## Target resolution
 
@@ -56,6 +65,30 @@ Input-capability fallback: if the host offers a structured input facility, use
 it; otherwise ask a single conversational question and stop. Emit
 `BLOCKED_NO_USER_INPUT_CAPABILITY` only when no later response can be obtained.
 
+## Route selection
+
+Route selection belongs to `x-plan`; do not dispatch every optional specialist
+by default.
+
+- **Product** applies to a new capability, a user-visible behavior change,
+  unclear product scope/priority, or an external developer-facing product
+  surface such as API / CLI / SDK behavior.
+- **Design** applies to new or changed UI, interaction flow/state, information
+  architecture, or design-system behavior.
+- **DevEx** applies to the internal engineering-team journey: setup, build,
+  first change, test, debug, CI/release, contributor docs, or maintainer
+  workflow. Do not use DevEx as a substitute for Product on external API / CLI /
+  SDK semantics.
+- **Engineering** always applies and is always last.
+
+For a batch, evaluate applicability before dispatch and use the ordered union of
+the required facets. Do not invent work merely to justify a selected facet, and
+do not silently drop a facet whose concern is present.
+
+The canonical route string is lowercase, comma-separated, and ordered
+`product,design,devex,engineering`, dropping facets that do not apply and never
+dropping Engineering.
+
 ## Toolkit
 
 ```bash
@@ -80,20 +113,52 @@ never from a sibling skill path or a specialist's Direct workflow:
 - `references/devex-facet-contract.md`
 - `references/engineering-facet-contract.md`
 
-When dispatching a specialist, hand it the contract that belongs to its facet.
-The running specialist then reads its own `references/facet-contract.md` — the
-same canonical file, bundled separately.
+When dispatching a specialist, hand it the contract that belongs to its facet,
+the exact item target, and the current planning fingerprint. The running
+specialist then reads its own `references/facet-contract.md` — the same
+canonical contract, bundled separately.
+
+## Fingerprint discipline
+
+The planning fingerprint is a content boundary, not a timestamp. Recompute it
+before each specialist dispatch and after every edit to a fingerprinted input.
+Never relabel a stale `completed@<old-fp>` status as current without rerunning
+the affected reasoning.
+
+Owner Decisions need special care. In Facet mode, specialists do not rewrite
+canonical fingerprint inputs. If the Owner accepts a decision that changes
+`Planning route`, `Selected work`, `## Problem / Goal`, `## Scope`, or
+`## Current → Desired Behavior`, `x-plan` must:
+
+1. apply the accepted change to the canonical item first using the host's normal
+   file-editing capability;
+2. recompute the fingerprint;
+3. accept the existing Owner Decision at that **new** fingerprint with
+   `xdh plan decision set`;
+4. rerun the affected selected facets from the earliest changed concern through
+   Engineering.
+
+This prevents an accepted scope or behavior change from remaining bound to the
+old planning input. A decision that does not change a fingerprinted input may be
+accepted at the current fingerprint.
+
+## Specialist availability
+
+A missing capability inside a specialist follows that specialist's downgrade
+rules; it is not the same as a missing specialist. If a selected optional
+specialist (Product, Design, or DevEx) cannot run on the host, never silently
+skip it. Record an Owner Decision about proceeding without that facet; after the
+Owner explicitly accepts, the orchestrator may use the scoped facet writer only
+to record `deferred-missing@<current-fp>` with evidence that the specialist was
+unavailable. Do not synthesize the missing specialist's reasoning. Missing
+Engineering is always blocking.
 
 ## Required workflow
 
 ### 1. Resolve scope, target, and route
 
-Resolve the scope and target with the ladder above. Then determine the route:
-the ordered union of the applicable facets plus Engineering. The canonical form
-is lowercase, comma-separated, with Engineering mandatory and last, in the order
-`product,design,devex,engineering` (drop the facets that do not apply, never
-Engineering). Record per-item not-applicable facets so the plan is honest about
-what was skipped.
+Resolve the scope and target with the ladder above. Apply the route-selection
+rules before creating or updating any planning item.
 
 ### 2. Create or reuse the item
 
@@ -115,34 +180,44 @@ placeholder. The orchestrator owns this header mutation; facet mode does not.
 "$XDH" field set <item> Owner "<owner>"
 ```
 
-### 3. Fingerprint and store the input
+### 3. Compute the current fingerprint
 
 ```bash
 "$XDH" plan fingerprint <item>
 ```
 
-Store `X_PLAN_FINGERPRINT` and `X_PLAN_FORMAT` (`x-plan-input-v1` for Issues,
-`x-plan-input-spike-v1` for Spikes) in the item's planning input fingerprint
-field. Every facet records `completed@<this fingerprint>` so the whole plan is
-bound to the same content.
+Use `X_PLAN_FINGERPRINT` as the dispatch fingerprint and keep `X_PLAN_FORMAT`
+(`x-plan-input-v1` for Issues, `x-plan-input-spike-v1` for Spikes) for
+diagnostics. Do **not** manually stamp the `Planning input fingerprint` field;
+`xdh plan check` refreshes that advisory field only after the plan validates.
+Every completed facet records `completed@<current fingerprint>`.
 
 ### 4. Dispatch the facets in order
 
-Invoke the specialist skills sequentially, one facet at a time:
+Invoke only the selected specialists, sequentially:
 
 ```text
 Product? → Design? → DevEx? → Engineering (required)
 ```
 
-`x-plan` itself performs no facet work. Each specialist records its own status
-through its sole Facet-mode writer. Batch homogeneous Owner decisions into one
-brief; split genuinely different questions into separate groups. A question
-limit must never silently apply a default to a facet decision.
+Before each dispatch, recompute the fingerprint. After each return, verify that
+the specialist wrote only its own facet state/evidence/section and that any
+completion is bound to the current fingerprint. If canonical planning inputs
+changed, treat earlier completion as stale and rerun from the earliest affected
+facet; never carry a stale completion forward because the text still "looks
+right".
 
-When the Owner answers a pending row, record the transition through
-`xdh plan decision set` using the same OD ID and the current fingerprint.
-The command is retry-safe and rejects ID collisions; never edit the table with
-a generic text rewrite.
+`x-plan` itself performs no specialist reasoning. Each specialist records its
+own status through the scoped Facet-mode writer. Batch homogeneous Owner
+decisions into one brief; split genuinely different questions into separate
+groups. A question limit must never silently apply a default to a facet
+decision.
+
+When the Owner answers a pending row, keep the same OD ID. If the answer changes
+a fingerprinted input, follow **Fingerprint discipline** first; otherwise record
+the transition directly through `xdh plan decision set` at the current
+fingerprint. The command is retry-safe and rejects ID collisions; never edit the
+decision table with a generic text rewrite.
 
 ### 5. Check the plan
 
@@ -151,8 +226,9 @@ a generic text rewrite.
 ```
 
 `X_PLAN_CHECK=PASS` (with `X_PLAN_FINGERPRINT`) means every required facet is
-complete. A `BLOCKER...` line with a non-zero exit means the plan is not ready;
-resolve the blocker and re-check, do not force past it.
+complete and the advisory planning fingerprint has been refreshed. A
+`BLOCKER...` line with a non-zero exit means the plan is not ready; resolve the
+blocker and re-check, do not force past it.
 
 ### 6. Assign the Work Group
 
@@ -183,8 +259,9 @@ with the formal item, Owner, WG, and status.
 ## Owner questions
 
 Product direction, scope, priority, and user-visible behavior go to the Owner —
-batched, numbered, each with a recommended answer. Technical choices do not:
-make the call and record the rationale.
+batched when independent, numbered, each with a recommended answer. Technical
+choices do not: make the call and record the rationale. Never ask for facts that
+repository evidence can answer.
 
 ## Direct engineering entry point
 
