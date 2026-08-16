@@ -44,6 +44,12 @@ done
 
 The facet contract this skill follows is bundled at `references/facet-contract.md`.
 
+Every `<item>` below is the item's **file path** under `.dev-hub/`, normally the
+path handed over by `x-plan` as `X_ITEM_FILE`; never substitute only `IS-001` or
+`SP-001`. In Facet mode use the fingerprint handed over by the orchestrator and
+confirm it with `xdh plan fingerprint <item>` rather than inferring it from the
+conversation.
+
 ## Direct mode
 
 Direct mode requires an explicit plan target: the user names an existing `IS` /
@@ -78,6 +84,11 @@ completed@<fp> | deferred-owner@<fp> | deferred-missing@<fp>`. Completion
 records `completed@<current fingerprint>`; the fingerprint is reported by the
 read-only `xdh plan fingerprint <item>`.
 
+The deferred values are Owner-sanctioned exceptions, not shortcuts. `plan check`
+accepts `deferred-owner@<fp>` or `deferred-missing@<fp>` only when a Product
+Owner Decision is accepted at that same fingerprint; otherwise it fails with
+`facet=product status=deferred-unaccepted`.
+
 The `## Product Facet` evidence should make the resolved product contract easy
 for downstream facets to consume: intended outcome, user-visible behavior,
 scope boundaries, priority/tradeoffs, and any accepted Owner constraint.
@@ -89,11 +100,36 @@ such a decision, include the exact canonical input that would need to change
 (`## Problem / Goal`, `## Scope`, `## Current → Desired Behavior`, route, or
 selected work) so `x-plan` can apply the accepted change deterministically.
 
-After the Owner answers, the orchestrator keeps the same decision ID. If the
-answer changes a fingerprinted input, `x-plan` applies the accepted canonical
-edit first, recomputes the fingerprint, accepts that decision with
-`xdh plan decision set` at the new fingerprint, and then re-dispatches Product.
-Product itself does not mutate canonical fingerprint inputs in Facet mode.
+Product is the one specialist allowed to open its own pending Owner Decision row
+atomically with `blocked`. Write one project-local file containing exactly one
+complete row with the recommendation in the `Decision` cell:
+
+```text
+| OD-001 | product | <question> | <recommendation> | pending | — |
+```
+
+Then invoke the same scoped writer:
+
+```bash
+xdh plan facet set <item> --facet product --status blocked --evidence <ref> \
+  --section-file <f> --owner-decision-file <decision-row-file>
+```
+
+The writer applies Product status/evidence/section and the pending row together.
+It rejects `--owner-decision-file` for another facet, for a non-`blocked` status,
+or when the OD ID collides with different existing content.
+
+After the Owner answers, the decision is still pending. If the answer changes a
+fingerprinted input, `x-plan` applies the accepted canonical edit first,
+recomputes the fingerprint, then accepts that **same pending OD ID** at the new
+fingerprint with `xdh plan decision set`, and re-dispatches Product. That is the
+supported pending → accepted transition. Product itself does not mutate
+canonical fingerprint inputs in Facet mode.
+
+Do not confuse that flow with an **already accepted** decision that later becomes
+stale after another input edit. The current machine writer cannot re-anchor an
+accepted row to a new fingerprint; Product must not invent a second OD row and
+pretend the stale accepted row disappeared.
 
 Do not complete while the intended outcome, user-visible behavior, scope
 boundary, or required Owner decision is unresolved. A technical implementation
