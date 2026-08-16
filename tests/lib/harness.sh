@@ -98,6 +98,30 @@ skill_x_test_ensure_template() {
     "$SKILL_X_TEST_TEMPLATE/opencode-commands"
   # Agent-local state is not part of a fresh repository fixture.
   rm -rf "$SKILL_X_TEST_TEMPLATE/.claude"
+
+  # `example-skill` and `funny-text-rewriter` used to be shipped sample skills.
+  # Keep their stable names only as test fixtures so long-lived regression cases
+  # can exercise build/sync/update behavior without depending on production
+  # skills or forcing sample content back into commands-src/.
+  mkdir -p \
+    "$SKILL_X_TEST_TEMPLATE/commands-src/example-skill" \
+    "$SKILL_X_TEST_TEMPLATE/commands-src/funny-text-rewriter"
+  cat > "$SKILL_X_TEST_TEMPLATE/commands-src/example-skill/SKILL.md" <<'EOF'
+---
+name: example-skill
+description: Test-only canonical skill fixture.
+---
+
+# Test fixture
+EOF
+  cat > "$SKILL_X_TEST_TEMPLATE/commands-src/funny-text-rewriter/SKILL.md" <<'EOF'
+---
+name: funny-text-rewriter
+description: Test-only secondary skill fixture.
+---
+
+# Test fixture
+EOF
 }
 
 # The same template with `bin/build.sh` already run once. Build outputs are

@@ -119,7 +119,7 @@ bin/build.sh
 
 規則：
 
-1. **格式**：全小寫 kebab-case，只用 `a-z`、`0-9`、`-`，以字母開頭。例如 `example-skill`、`myapp-deploy`。不要用底線、大寫、空白或中文。
+1. **格式**：全小寫 kebab-case，只用 `a-z`、`0-9`、`-`，以字母開頭。例如 `myapp-status`、`myapp-deploy`。不要用底線、大寫、空白或中文。
 2. **資料夾名必須等於 frontmatter 裡的 `name:`**。目前 `bin/build.sh` 不會幫你檢查這件事，兩者不一致純粹是人為約定——建立資料夾時把 `name:` 複製貼上過去，不要自己改一份。
 3. **具體，避免單一泛用詞**。`deploy`、`test`、`sync` 這種字未來很容易撞名（不管是撞你自己的其他技能，還是撞其他來源裝進同一個 `~/.claude/skills/` 的技能/plugin）。一律搭配領域或專案名詞：`myapp-deploy` 而不是 `deploy`。
 4. **一組相關技能用共同字首**：例如同一個專案的維運技能，用 `myapp-` 開頭（`myapp-deploy`、`myapp-rollback`、`myapp-status`）。這樣在 `commands-src/` 目錄列表、`bin/skill-x doctor` 輸出裡會自然排在一起，一眼看出彼此相關。

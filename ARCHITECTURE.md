@@ -167,7 +167,7 @@ tests/lib/timeout-fixture.sh   驗證 harness 逾時路徑的受控 fixture
 
 ## 已知限制與優先驗證
 
-1. **Codex 路徑仍需實機驗證（中）**：目前把 `~/.agents/skills` 當主要路徑、`~/.codex/skills` 當相容路徑同時覆蓋；先跑 `bin/skill-x doctor` 與範例技能，再依實際載入來源用 `SKILL_X_CODEX_COMPAT=0` 簡化。
+1. **Codex 路徑仍需實機驗證（中）**：目前把 `~/.agents/skills` 當主要路徑、`~/.codex/skills` 當相容路徑同時覆蓋；先跑 `bin/skill-x doctor` 並呼叫 `x-discovery` 技能驗證，再依實際載入來源用 `SKILL_X_CODEX_COMPAT=0` 簡化。
 2. **Windows symlink（中）**：沒有 copy fallback；需 Developer Mode 或相應權限。
 3. **自然語言詢問（中）**：各工具互動能力不同，無法由 shell 測試完全保證。
 4. **無簽章驗證（低）**：信任 private origin；雲端應 pin commit，未驗證 commit signature。
