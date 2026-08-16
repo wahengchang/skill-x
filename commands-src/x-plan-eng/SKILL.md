@@ -1,6 +1,6 @@
 ---
 name: x-plan-eng
-description: Define the engineering facet of a planning item — architecture, data flow, interfaces, failure modes, tests and acceptance — to executable depth and run the planning gate; use as the engineering specialist inside x-plan orchestration, or standalone (Direct) for engineering-only planning from a discovery hub.md or a single requirement.
+description: Define the engineering facet of a planning item — architecture, data flow, interfaces, failure modes, tests and acceptance — to executable depth and run the planning gate; use as the engineering specialist inside x-plan orchestration, or standalone (Direct) when the work needs no product, design, or DevEx decision and only its engineering plan is missing. Work that does need those facets goes to x-plan, which routes and dispatches instead.
 ---
 
 # x-plan-eng
@@ -40,6 +40,10 @@ done
 ```
 
 The facet contract this skill follows is bundled at `references/facet-contract.md`.
+
+Every `<item>` below is the **path** the creating command reported as
+`X_ITEM_FILE`, never the bare `IS-001`. The planning commands take a file inside
+`.dev-hub/` and reject anything else.
 
 ## Direct mode (engineering-only planning)
 
@@ -99,19 +103,33 @@ Standalone mode needs no extra flag: with no Cycle present, planning documents
 land in a shared standalone scope under `.dev-hub/`, which stays put between
 invocations so re-planning the same work reuses it.
 
-### 4. Fingerprint and store the input
+### 4. Write the fingerprinted sections, then fingerprint
+
+The fingerprint covers the route, the selected work, and the item's shared
+narrative: for an Issue `## Problem / Goal`, `## Scope` (both `### In` and
+`### Out`) and `## Current → Desired Behavior`; for a Spike `## Core Question`,
+`## Scope / Timebox`, `## Method` and `## Decision Rule`. Write those first.
 
 ```bash
 "$XDH" plan fingerprint <item>
 ```
 
-Store `X_PLAN_FINGERPRINT` and `X_PLAN_FORMAT` (`x-plan-input-v1` for Issues,
-`x-plan-input-spike-v1` for Spikes) in the item's planning input fingerprint
-field.
+`X_PLAN_FINGERPRINT` is the value every facet status and Owner Decision anchors
+to; `X_PLAN_FORMAT` (`x-plan-input-v1` for Issues, `x-plan-input-spike-v1` for
+Spikes) only names the serialization behind it. Carry both in the session —
+there is no format field on the item, and `xdh plan check` stamps
+`Planning input fingerprint` itself. Editing any of those sections afterwards
+rotates the fingerprint and stales the recorded facet, so finish them before
+step 6.
+
+A Spike is always route `engineering` alone; any other route on an `SP` document
+fails with `route status=spike-requires-engineering`.
 
 ### 5. Define the plan to executable depth
 
-Fill the `## Engineering Facet` section of the generated `IS`/`SP` document:
+Fill the body of the generated `IS`/`SP` document — each of these is its own
+`##` section and the gate checks them one by one. The first three are the
+fingerprinted sections from step 4:
 
 - **Problem / goal**, and who is hurt today by its absence.
 - **Scope in / out** — the out list prevents the drift, so write it.
@@ -128,8 +146,14 @@ Fill the `## Engineering Facet` section of the generated `IS`/`SP` document:
   proves, not just that tests exist.
 - **Acceptance criteria** — numbered, pass/fail, no subjective language.
   "Sessions older than 30 minutes return 401 for all four roles", not
-  "session handling works".
-- **Definition of Ready** — every box checked before the status becomes `ready`.
+  "session handling works". Numbered is not a style preference: the gate reads
+  numbered items or checked boxes, and an unchecked `- [ ]` counts as nothing.
+- **Definition of Ready** — every box ticked before `plan check`, except
+  `Owner/WG/branch/worktree`, which the WG step satisfies.
+
+The reasoning itself — why this architecture, what was rejected, which
+`file:line` the current behavior came from — goes in `## Engineering Facet`,
+which step 6 records as the facet's evidence.
 
 A Spike answers exactly **one** decisive question. If it has two, split it:
 state the question, what decision it unblocks, the method, the **decision rule**
@@ -160,6 +184,18 @@ repair above assigns the item Owner. `plan ready` is the
 only way a new-format item reaches `ready`: do not use the generic `field set`
 to set `Status ready` on a new-format item — the machine layer rejects it and
 directs you back to `xdh plan ready`.
+
+`plan ready` also verifies the delivery target: the item's Owner matches the
+WG's, the WG names this item exactly once, and the WG's worktree is registered
+with its branch checked out. `status=worktree-unregistered` or
+`status=branch-mismatch` means the worktree moved or was removed after `wg new`
+— repair the worktree, do not edit the WG document to match.
+
+If the fingerprint rotated between step 4 and here, `plan check` reports
+`facet=engineering status=stale`. Re-read the fingerprint, re-record the facet
+at the new value, and carry any accepted Owner Decision forward under a fresh OD
+ID — an accepted row cannot be moved to a new fingerprint
+(`decision=<id> status=id-collision`).
 
 ### 8. Write back and check consistency
 

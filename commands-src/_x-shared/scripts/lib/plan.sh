@@ -209,7 +209,10 @@ x_plan_has_content() {
       sub(/[ \t]+$/, "", line)
       if (line == "") next
       if (line ~ /^<[^>]+>$/) next
-      if (line ~ /^#{1,6}([ \t]|$)/) next
+      # `#+` rather than `#{1,6}`: mawk 1.3.4 aborts with a REcompile() panic on
+      # an interval followed by an alternation group, which would make every
+      # section look empty and every `plan check` fail on a mawk host.
+      if (line ~ /^#+([ \t]|$)/) next
       if (line ~ /^\x60\x60\x60/ || line ~ /^~~~/) next
       if (line ~ /^\|/) next
       if (line ~ /^[-*_][-* _]*$/) next
@@ -262,7 +265,8 @@ x_plan_scope_complete() {
     in_scope {
       line = $0
       sub(/[ \t]+$/, "", line)
-      if (line == "" || line ~ /^#{1,6}([ \t]|$)/ || line ~ /^\x60\x60\x60/ || line ~ /^~~~/ ||
+      # `#+` rather than `#{1,6}` for the same mawk REcompile() reason as above.
+      if (line == "" || line ~ /^#+([ \t]|$)/ || line ~ /^\x60\x60\x60/ || line ~ /^~~~/ ||
           line ~ /^\|/ || line ~ /^<[^>]+>$/ || line == "-" || line == "—") next
       if (part == "in") content_in = 1
       if (part == "out") content_out = 1

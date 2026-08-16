@@ -61,6 +61,28 @@ frontmatter_name() {
   awk -F': ' '/^name: / { sub(/\r$/, "", $2); print $2; exit }' "$1"
 }
 
+# Assert a pattern is absent. A bare `! rg -q ...` is exempt from `set -e`, so
+# unless it happens to be the last statement of its test function its failure is
+# discarded and the assertion never protects anything. This helper returns
+# non-zero from the calling function instead.
+assert_absent() {
+  local pattern=$1 file=$2 matches
+  if matches=$(rg -n "$pattern" "$file"); then
+    echo "forbidden pattern '$pattern' in $file:" >&2
+    echo "$matches" >&2
+    return 1
+  fi
+}
+
+assert_absent_fixed() {
+  local pattern=$1 file=$2 matches
+  if matches=$(rg -nF "$pattern" "$file"); then
+    echo "forbidden literal '$pattern' in $file:" >&2
+    echo "$matches" >&2
+    return 1
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -69,8 +91,8 @@ test_facet_contracts_exist_and_are_clean() {
   for facet in product design devex engineering; do
     local contract="$FACETS_DIR/$facet-facet-contract.md"
     [[ -f "$contract" ]] || { echo "missing $contract" >&2; return 1; }
-    ! rg -q '^## Handover' "$contract"
-    ! rg -q '^## Continuing' "$contract"
+    assert_absent '^## Handover' "$contract" || return 1
+    assert_absent '^## Continuing' "$contract" || return 1
   done
 }
 
@@ -106,8 +128,8 @@ test_x_plan_references_only_local_facet_contracts() {
   for facet in product design devex engineering; do
     rg -qF "references/$facet-facet-contract.md" "$skill"
   done
-  ! rg -q 'commands-src/x-plan-' "$skill"
-  ! rg -q '_x-shared/facets/' "$skill"
+  assert_absent 'commands-src/x-plan-' "$skill" || return 1
+  assert_absent '_x-shared/facets/' "$skill" || return 1
 }
 
 test_x_plan_has_precedence_ladder_and_mandatory_engineering() {
@@ -173,8 +195,10 @@ test_x_plan_eng_direct_mode_gate() {
   rg -qF 'plan check' "$skill"
   rg -qF 'wg new' "$skill"
   rg -qF 'plan ready' "$skill"
-  ! rg -q '^\s*(xdh|"\$XDH")\s+field set' "$skill"
-  ! rg -qF 'field set <IS file> Status ready' "$skill"
+  # `field set` is legitimate for the Owner repair; what Direct mode must never
+  # do is drive Status through it — `plan ready` is the only path to ready.
+  assert_absent '^\s*(xdh|"\$XDH")\s+field set\s+\S+\s+Status' "$skill" || return 1
+  assert_absent_fixed 'field set <IS file> Status ready' "$skill" || return 1
 }
 
 test_literal_happy_paths_assign_item_owner() {
@@ -184,7 +208,7 @@ test_literal_happy_paths_assign_item_owner() {
     rg -qF 'item new --type issue' "$file"
     rg -qF -- '--owner "<owner>"' "$file"
     rg -qF 'field set <item> Owner "<owner>"' "$file"
-    ! rg -qF 'wg new assigns the Owner' "$file"
+    assert_absent_fixed 'wg new assigns the Owner' "$file" || return 1
   done
 }
 
@@ -287,7 +311,7 @@ test_lifecycle_planning_handoffs() {
   local skill
   for skill in x-discovery x-review x-debug x-ship x-housekeeping; do
     rg -qF 'Discovery → Planning → Implementation' "$PROJECT_ROOT/commands-src/$skill/SKILL.md"
-    ! rg -q 'Engineering Planning' "$PROJECT_ROOT/commands-src/$skill/SKILL.md"
+    assert_absent 'Engineering Planning' "$PROJECT_ROOT/commands-src/$skill/SKILL.md" || return 1
   done
   rg -qF 'Next: x-plan' "$PROJECT_ROOT/commands-src/x-discovery/SKILL.md"
 }
@@ -299,12 +323,12 @@ test_specialist_facet_mode_vocabulary_excludes_not_applicable() {
     rg -qF 'xdh plan facet set' "$TEST_ROOT/fm.tmp"
     rg -qF '<value>' "$TEST_ROOT/fm.tmp"
     # The `<value>` vocabulary line must not list not-applicable as a writable status.
-    ! rg -q '<value>.*not-applicable' "$TEST_ROOT/fm.tmp"
+    assert_absent '<value>.*not-applicable' "$TEST_ROOT/fm.tmp" || return 1
   done
   extract_section "$PROJECT_ROOT/commands-src/x-plan-eng/SKILL.md" 'Engineering Facet' > "$TEST_ROOT/eng.tmp"
   rg -qF '<value>' "$TEST_ROOT/eng.tmp"
-  ! rg -q '<value>.*not-applicable' "$TEST_ROOT/eng.tmp"
-  ! rg -q '<value>.*deferred-owner' "$TEST_ROOT/eng.tmp"
+  assert_absent '<value>.*not-applicable' "$TEST_ROOT/eng.tmp" || return 1
+  assert_absent '<value>.*deferred-owner' "$TEST_ROOT/eng.tmp" || return 1
 }
 
 run_test 'product scope stop and no silent defaults' test_product_scope_stop_and_no_silent_defaults

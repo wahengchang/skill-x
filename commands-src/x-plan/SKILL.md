@@ -70,6 +70,10 @@ and makes branch/worktree creation idempotent. Every command answers in
 `KEY=value` lines. Reuse is reported back as `X_ITEM_REUSED` — re-planning the
 same work must never produce `IS-002` beside an identical `IS-001`.
 
+Every `<item>` below is the **path** the creating command reported as
+`X_ITEM_FILE`, never the bare `IS-001`. The planning commands take a file inside
+`.dev-hub/` and reject anything else.
+
 ## Facet contracts
 
 `x-plan` reads each facet contract **only** from its own bundled references, and
@@ -95,6 +99,11 @@ is lowercase, comma-separated, with Engineering mandatory and last, in the order
 Engineering). Record per-item not-applicable facets so the plan is honest about
 what was skipped.
 
+A Spike is always route `engineering` alone. The machine layer enforces it —
+any other route on an `SP` document fails every planning command with
+`route status=spike-requires-engineering` — so product or design questions that
+surround a Spike belong on the Issue that the Spike unblocks, not on the Spike.
+
 ### 2. Create or reuse the item
 
 ```bash
@@ -115,16 +124,32 @@ placeholder. The orchestrator owns this header mutation; facet mode does not.
 "$XDH" field set <item> Owner "<owner>"
 ```
 
-### 3. Fingerprint and store the input
+### 3. Write the shared sections, then fingerprint
+
+The fingerprint covers the planning route, the selected work, and the item's
+shared narrative: for an Issue `## Problem / Goal`, `## Scope` (both `### In`
+and `### Out`) and `## Current → Desired Behavior`; for a Spike
+`## Core Question`, `## Scope / Timebox`, `## Method` and `## Decision Rule`.
+
+Those sections — and every other shared `##` section of the document — are the
+orchestrator's to author. No facet can reach them: a specialist may write only
+its own `## <Facet> Facet` section, and the field writer only rewrites
+`- Field: value` bullets. Write them before dispatching anything, from the
+material the discovery hub and the Owner have already settled.
 
 ```bash
 "$XDH" plan fingerprint <item>
 ```
 
-Store `X_PLAN_FINGERPRINT` and `X_PLAN_FORMAT` (`x-plan-input-v1` for Issues,
-`x-plan-input-spike-v1` for Spikes) in the item's planning input fingerprint
-field. Every facet records `completed@<this fingerprint>` so the whole plan is
-bound to the same content.
+`X_PLAN_FINGERPRINT` is the anchor every facet status and every Owner Decision
+is recorded at; `X_PLAN_FORMAT` (`x-plan-input-v1` for Issues,
+`x-plan-input-spike-v1` for Spikes) only names the serialization that produced
+it. Carry both in the session — there is no format field on the item, and
+`xdh plan check` stamps `Planning input fingerprint` itself.
+
+Once the first facet completes, treat those sections as frozen: editing one
+rotates the fingerprint and stales everything anchored to the old value. See
+*Re-anchoring* below for the way back.
 
 ### 4. Dispatch the facets in order
 
@@ -135,20 +160,48 @@ Product? → Design? → DevEx? → Engineering (required)
 ```
 
 `x-plan` itself performs no facet work. Each specialist records its own status
-through its sole Facet-mode writer. Batch homogeneous Owner decisions into one
-brief; split genuinely different questions into separate groups. A question
-limit must never silently apply a default to a facet decision.
+through its sole Facet-mode writer. Hand each one the same four things: the
+item's file path, its facet name, the matching contract from `references/`, and
+the current fingerprint it must anchor to. A specialist that has to guess the
+fingerprint will guess a stale one.
 
-When the Owner answers a pending row, record the transition through
-`xdh plan decision set` using the same OD ID and the current fingerprint.
-The command is retry-safe and rejects ID collisions; never edit the table with
-a generic text rewrite.
+Batch homogeneous Owner decisions into one brief; split genuinely different
+questions into separate groups. A question limit is not a licence to guess: it
+must never silently apply a default to a facet decision.
+
+Owner Decisions live in one ID-keyed table and move in one direction. A pending
+row carries the **recommended** answer in its `Decision` cell and `—` as its
+fingerprint; the accepted row carries the Owner's answer and the fingerprint it
+was accepted at. Open the row and record the answer through the same writer,
+using the same OD ID — never edit the table with a generic text rewrite:
+
+```bash
+"$XDH" plan decision set <item> --id OD-001 --facet <facet> \
+  --question "<question>" --decision "<recommendation>" --state pending
+"$XDH" plan decision set <item> --id OD-001 --facet <facet> \
+  --question "<question>" --decision "<owner answer>" --state accepted@<fp>
+```
+
+Only `product` may open its own row, atomically with its blocked status. For
+design, devex, and engineering the specialist reports the question and blocks;
+the orchestrator opens the row. A facet that ends `deferred-owner@<fp>` or
+`deferred-missing@<fp>` needs an accepted decision for that same facet at that
+same fingerprint, otherwise `plan check` rejects it as
+`facet=<f> status=deferred-unaccepted`.
 
 ### 5. Check the plan
 
 ```bash
 "$XDH" plan check <item>
 ```
+
+The gate reads the whole document, not just the facet fields. For an Issue it
+also requires content in `## Architecture / Data Flow`,
+`## Interfaces / Dependencies`, `## Failure Modes / Edge Cases / Risks`, a
+numbered step in `## Implementation Order`, at least one row in `## Tests`,
+**numbered** `## Acceptance Criteria` (an unchecked `- [ ]` does not count), and
+every `## Definition of Ready` box ticked except `Owner/WG/branch/worktree`,
+which step 6 satisfies.
 
 `X_PLAN_CHECK=PASS` (with `X_PLAN_FINGERPRINT`) means every required facet is
 complete. A `BLOCKER...` line with a non-zero exit means the plan is not ready;
@@ -174,11 +227,39 @@ This is the only way a new-format item reaches `ready`. Do not use the generic
 `field set` to set `Status ready` on a new-format item — the machine layer
 rejects it and directs you back to `xdh plan ready`.
 
+`plan ready` re-validates everything `plan check` did and then checks the
+delivery target: the item's Owner matches the WG's, the WG names this item
+exactly once, and the WG's branch and worktree exist, are registered, and have
+that branch checked out. `wg=... status=worktree-unregistered` or
+`status=branch-mismatch` means the worktree was moved or removed after `wg new`
+created it — repair the worktree, do not edit the WG document to match. The item
+must also not change between check and stamp: any concurrent edit aborts with
+`item=changed-during-validation`.
+
 ### 8. Verify handoff
 
 Could an implementation agent that never saw this conversation start each item
 immediately? If not, the plan is not finished. Update the `hub.md` work table
 with the formal item, Owner, WG, and status.
+
+## Re-anchoring after a fingerprint change
+
+A shared section edited after a facet completed shows up at the next check as
+`BLOCKER facet=<f> status=stale expected=<new> actual=completed@<old>`. Never
+force past it; re-anchor deliberately:
+
+1. Re-read the fingerprint with `plan fingerprint` and take the new value.
+2. Have each completed facet re-record itself at the new fingerprint. A facet
+   whose reasoning genuinely changed is re-run, not restamped.
+3. Accepted Owner Decisions cannot be moved. The writer permits only
+   pending → accepted, so re-accepting the same OD ID at a new fingerprint fails
+   with `decision=<id> status=id-collision`. Carry the answer forward under a
+   fresh OD ID, starting from a pending row. With `product` in the route this is
+   mandatory: `plan check` rejects a stale accepted product row outright
+   (`state=stale-product re-anchor-required`).
+
+Re-anchoring is expensive by design. The cheap path is step 3 of the workflow:
+settle the shared sections before the first facet is dispatched.
 
 ## Owner questions
 

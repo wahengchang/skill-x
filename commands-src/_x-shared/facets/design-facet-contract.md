@@ -71,6 +71,11 @@ cannot be obtained. A missing Image Generate / Display / Compare capability is
 not a blocker: it is recorded as `unavailable` and the design proceeds with what
 exists.
 
+The design facet does not write the decision row itself: the atomic
+facet-and-row write is reserved for `product`. It records `blocked`, states the
+question and its recommended answer in `## Design Facet`, and the orchestrator
+opens the pending row with the ID-keyed writer.
+
 ## Forbidden lifecycle mutations
 
 This facet must never create an item (`item new`), create a Work Group
