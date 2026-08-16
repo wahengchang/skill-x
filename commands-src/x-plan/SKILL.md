@@ -13,8 +13,9 @@ mandatory.
 
 `x-plan` orchestrates. It does not itself perform specialist reasoning: it
 resolves scope and target, selects the route, dispatches specialists, applies
-Owner-approved changes to canonical planning inputs, and runs the machine gates.
-This skill does not write product code and does not perform the final review.
+Owner-approved or specialist-produced changes to shared planning sections, and
+runs the machine gates. This skill does not write product code and does not
+perform the final review.
 
 ## When to use
 
@@ -89,6 +90,10 @@ The canonical route string is lowercase, comma-separated, and ordered
 `product,design,devex,engineering`, dropping facets that do not apply and never
 dropping Engineering.
 
+A Spike is always route `engineering`; Product / Design / DevEx are
+`not-applicable` on the Spike itself. Product or design decisions around a Spike
+belong on the Issue or work item that the Spike unblocks.
+
 ## Toolkit
 
 ```bash
@@ -103,6 +108,10 @@ and makes branch/worktree creation idempotent. Every command answers in
 `KEY=value` lines. Reuse is reported back as `X_ITEM_REUSED` — re-planning the
 same work must never produce `IS-002` beside an identical `IS-001`.
 
+Every `<item>` in planning commands is the **file path** reported as
+`X_ITEM_FILE`, never only `IS-001` / `SP-001`. Planning mutations are confined
+to item files under `.dev-hub/`.
+
 ## Facet contracts
 
 `x-plan` reads each facet contract **only** from its own bundled references, and
@@ -114,9 +123,27 @@ never from a sibling skill path or a specialist's Direct workflow:
 - `references/engineering-facet-contract.md`
 
 When dispatching a specialist, hand it the contract that belongs to its facet,
-the exact item target, and the current planning fingerprint. The running
+the exact item path, and the current planning fingerprint. The running
 specialist then reads its own `references/facet-contract.md` — the same
 canonical contract, bundled separately.
+
+## Shared-section ownership
+
+Facet mode deliberately cannot rewrite shared H2 sections. `x-plan` owns the
+mechanical application of shared-section content to the item, while the
+specialists own the reasoning for their concerns.
+
+Before the first dispatch, settle the **fingerprinted inputs** from already-known
+evidence and Owner decisions:
+
+- Issue: `## Problem / Goal`, `## Scope`, `## Current → Desired Behavior`;
+- Spike: `## Core Question`, `## Scope / Timebox`, `## Method`, `## Decision Rule`.
+
+Do not require all non-fingerprinted engineering sections to be finished before
+Engineering runs. Engineering may produce the architecture / interfaces /
+failure-mode / implementation / test / acceptance content; `x-plan` applies
+that returned content to the corresponding shared sections before `plan check`.
+That is mechanical orchestration, not a second independent engineering design.
 
 ## Fingerprint discipline
 
@@ -125,22 +152,32 @@ before each specialist dispatch and after every edit to a fingerprinted input.
 Never relabel a stale `completed@<old-fp>` status as current without rerunning
 the affected reasoning.
 
-Owner Decisions need special care. In Facet mode, specialists do not rewrite
-canonical fingerprint inputs. If the Owner accepts a decision that changes
+Owner Decisions need special care. A **pending** decision has no accepted
+fingerprint yet. If the Owner accepts a pending decision that changes
 `Planning route`, `Selected work`, `## Problem / Goal`, `## Scope`, or
 `## Current → Desired Behavior`, `x-plan` must:
 
-1. apply the accepted change to the canonical item first using the host's normal
-   file-editing capability;
+1. apply the accepted canonical edit first;
 2. recompute the fingerprint;
-3. accept the existing Owner Decision at that **new** fingerprint with
-   `xdh plan decision set`;
+3. accept that still-pending Owner Decision using the **same OD ID** at the new
+   fingerprint with `xdh plan decision set`;
 4. rerun the affected selected facets from the earliest changed concern through
    Engineering.
 
-This prevents an accepted scope or behavior change from remaining bound to the
-old planning input. A decision that does not change a fingerprinted input may be
-accepted at the current fingerprint.
+That pending → accepted transition is supported by the machine writer. It keeps
+the decision and the content it approved anchored to the same fingerprint.
+
+Different case: if an Owner Decision is **already accepted** and some later,
+unrelated edit rotates the fingerprint, do not invent a fresh OD ID as a fake
+re-anchor. The old accepted Product row still exists and `plan check` reports
+`state=stale-product re-anchor-required`; the current writer has no accepted →
+accepted re-anchor transition. Stop and surface the machine-layer blocker rather
+than editing the table generically or claiming the plan is recoverable by a new
+row alone. The cheap path is to settle fingerprinted inputs before acceptance
+and before facet completion.
+
+A decision that does not change a fingerprinted input may be accepted at the
+current fingerprint.
 
 ## Specialist availability
 
@@ -152,6 +189,11 @@ after the Owner explicitly accepts, the orchestrator may use the scoped facet
 writer only to record `deferred-missing@<current-fp>` with evidence that the
 specialist was unavailable. Do not synthesize the missing specialist's
 reasoning. Missing Engineering is always blocking.
+
+A selected optional facet may use `deferred-owner@<fp>` or
+`deferred-missing@<fp>` only when an Owner Decision for that same facet is
+accepted at that same fingerprint. Otherwise `plan check` rejects the deferral
+as `deferred-unaccepted`.
 
 ## Required workflow
 
@@ -180,7 +222,10 @@ placeholder. The orchestrator owns this header mutation; facet mode does not.
 "$XDH" field set <item> Owner "<owner>"
 ```
 
-### 3. Compute the current fingerprint
+### 3. Settle fingerprinted inputs and compute the fingerprint
+
+Write the fingerprinted shared inputs listed in **Shared-section ownership**
+before the first facet dispatch. Then compute:
 
 ```bash
 "$XDH" plan fingerprint <item>
@@ -224,25 +269,36 @@ next unused `OD-NNN`, then record the pending row before asking:
 ```
 
 Product scope decisions may use Product's contract-defined atomic pending-row
-writer instead. In every case, keep the same OD ID from pending through
-acceptance.
+writer instead. In every case, keep the same OD ID from pending through its one
+accepted transition.
 
-When the Owner answers a pending row, keep the same OD ID. If the answer changes
-a fingerprinted input, follow **Fingerprint discipline** first; otherwise record
+When the Owner answers a pending row, if the answer changes a fingerprinted
+input, follow **Fingerprint discipline** before accepting it; otherwise record
 the transition directly through `xdh plan decision set` at the current
 fingerprint. The command is retry-safe and rejects ID collisions; never edit the
 decision table with a generic text rewrite.
 
-### 5. Check the plan
+### 5. Check the whole plan
+
+Before the machine gate, ensure the item has the shared content Engineering and
+other facets produced. For an Issue, the validator requires substantive
+`## Architecture / Data Flow`, `## Interfaces / Dependencies`, and
+`## Failure Modes / Edge Cases / Risks`; at least one numbered step in
+`## Implementation Order`; at least one data row in `## Tests`; and at least one
+**numbered criterion or checked checkbox** in `## Acceptance Criteria`. Every
+unchecked `## Definition of Ready` box is blocking except the
+`Owner/WG/branch/worktree` item, which is satisfied by the delivery setup.
+
+Then run:
 
 ```bash
 "$XDH" plan check <item>
 ```
 
-`X_PLAN_CHECK=PASS` (with `X_PLAN_FINGERPRINT`) means every required facet is
-complete and the advisory planning fingerprint has been refreshed. A
-`BLOCKER...` line with a non-zero exit means the plan is not ready; resolve the
-blocker and re-check, do not force past it.
+`X_PLAN_CHECK=PASS` (with `X_PLAN_FINGERPRINT`) means every required facet and
+whole-document requirement is complete and the advisory planning fingerprint
+has been refreshed. A `BLOCKER...` line with a non-zero exit means the plan is
+not ready; resolve the blocker and re-check, do not force past it.
 
 ### 6. Assign the Work Group
 
@@ -263,6 +319,12 @@ not assign or repair the item's Owner.
 This is the only way a new-format item reaches `ready`. Do not use the generic
 `field set` to set `Status ready` on a new-format item — the machine layer
 rejects it and directs you back to `xdh plan ready`.
+
+`plan ready` revalidates the planning gate and the delivery target: item Owner
+must match WG Owner; the WG must contain the item exactly once; branch and
+worktree must exist; the worktree must be registered and have the WG branch
+checked out. Repair the actual branch/worktree when those checks fail rather
+than editing WG metadata to match stale infrastructure.
 
 ### 8. Verify handoff
 
