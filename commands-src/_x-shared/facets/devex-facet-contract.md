@@ -18,7 +18,8 @@ The devex facet reads:
   `## Owner Decisions` rows that affect developer experience.
 
 It never rewrites the Product, Design, or Engineering facet sections and never
-touches their fields.
+touches their fields. `<item>` is the item file path under `.dev-hub/`, not a
+bare item ID.
 
 External developer-facing API / CLI / SDK semantics are Product concerns.
 DevEx is specifically the internal contributor / maintainer workflow.
@@ -67,14 +68,19 @@ if it already ran, and never fill a current-state gap by assumption.
 
 Most DevEx choices are technical and should be decided from evidence with the
 rationale recorded. If a gap actually requires an Owner-only product/policy
-choice, return a numbered decision brief to `x-plan` with the question,
-recommendation, and consequences. The specialist does not insert or accept the
-Owner Decision row itself.
+choice, record `blocked` and return a numbered decision brief to `x-plan` with
+the question, recommendation, and consequences. The specialist does not insert
+or accept the Owner Decision row itself.
 
 `x-plan` records the pending decision through `xdh plan decision set`. If the
-accepted answer changes a fingerprinted canonical scope/behavior input, `x-plan`
-applies that edit first, recomputes the fingerprint, accepts the same decision
-ID at the new fingerprint, and re-dispatches affected facets.
+Owner answer changes a fingerprinted canonical scope/behavior input, `x-plan`
+applies that edit **while the row is still pending**, recomputes the fingerprint,
+accepts the same pending OD ID at the new fingerprint, and re-dispatches affected
+facets.
+
+If a DevEx decision was already accepted and a later unrelated canonical edit
+makes it stale, a fresh OD ID does not erase the old accepted row. Do not present
+that as a re-anchor solution; return the machine-layer blocker to `x-plan`.
 
 ## Permitted fields and section
 
@@ -101,6 +107,11 @@ xdh plan facet set <item> --facet devex --status completed@<fp> --evidence <ref>
 
 `<fp>` is the current planning fingerprint reported by the read-only
 `xdh plan fingerprint <item>`.
+
+`deferred-owner@<fp>` and `deferred-missing@<fp>` are Owner-sanctioned
+exceptions, not shortcuts. `plan check` accepts either only when a DevEx Owner
+Decision is accepted at that same fingerprint; otherwise it reports
+`facet=devex status=deferred-unaccepted`.
 
 ## Blocker behavior
 
