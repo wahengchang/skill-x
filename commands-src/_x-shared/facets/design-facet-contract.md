@@ -19,7 +19,8 @@ The design facet reads:
 - relevant existing UI, design-system, and implementation evidence.
 
 It never rewrites the Product, DevEx, or Engineering facet sections and never
-touches their fields.
+touches their fields. `<item>` is the item file path under `.dev-hub/`, not a
+bare item ID.
 
 ## Required design result
 
@@ -69,20 +70,26 @@ must not silently collapse multiple plausible directions into one.
 When staging design artifacts, pass each observed result through the public
 `design prepare` options `--image-generate`, `--image-display`, and
 `--image-compare`. Each value is explicitly `available` or `unavailable`; no
-implicit environment default is accepted.
+implicit environment default is accepted. In Facet mode, use the current
+planning fingerprint supplied by `x-plan`.
 
 ## Owner decision handoff
 
-If evidence cannot resolve a material UX choice, the specialist returns a
-numbered decision brief to `x-plan` with the question, recommendation, and
-consequences. The specialist does not insert or accept the Owner Decision row
-itself because its only item mutation is the scoped Design writer.
+If evidence cannot resolve a material UX choice, the specialist records
+`blocked` and returns a numbered decision brief to `x-plan` with the question,
+recommendation, and consequences. The specialist does not insert or accept the
+Owner Decision row itself because its only item mutation is the scoped Design
+writer.
 
-`x-plan` records the pending decision through `xdh plan decision set`. After the
-Owner answers, if the decision changes a fingerprinted canonical scope/behavior
-input, `x-plan` applies that canonical edit first, recomputes the fingerprint,
-accepts the same decision ID at the new fingerprint, and re-dispatches the
-affected facets.
+`x-plan` records the pending decision through `xdh plan decision set`. If the
+Owner answer changes a fingerprinted canonical scope/behavior input, `x-plan`
+applies that canonical edit **while the row is still pending**, recomputes the
+fingerprint, accepts the same pending OD ID at the new fingerprint, and
+re-dispatches affected facets.
+
+If a Design decision was already accepted and a later unrelated canonical edit
+makes it stale, a fresh OD ID does not erase the old accepted row. Do not present
+that as a re-anchor solution; return the machine-layer blocker to `x-plan`.
 
 ## Permitted fields and section
 
@@ -109,6 +116,11 @@ xdh plan facet set <item> --facet design --status completed@<fp> --evidence <ref
 
 `<fp>` is the current planning fingerprint reported by the read-only
 `xdh plan fingerprint <item>`.
+
+`deferred-owner@<fp>` and `deferred-missing@<fp>` are Owner-sanctioned
+exceptions, not shortcuts. `plan check` accepts either only when a Design Owner
+Decision is accepted at that same fingerprint; otherwise it reports
+`facet=design status=deferred-unaccepted`.
 
 ## Blocker behavior
 
