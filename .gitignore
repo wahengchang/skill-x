@@ -6,3 +6,6 @@ opencode-commands/
 *.swp
 *.swo
 .DS_Store
+.dev-hub/active/
+.dev-hub/worktrees/
+.dev-hub/runtime/
