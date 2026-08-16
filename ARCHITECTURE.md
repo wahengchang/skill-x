@@ -83,7 +83,7 @@ adapter 的 action contract 固定為：`build <canonical-staging-dir> <artifact
 
 ### `x-*` 開發週期技能組
 
-六顆技能（`x-discovery`、`x-plan-eng`、`x-review`、`x-debug`、`x-ship`、`x-housekeeping`）共用一份 `commands-src/_x-shared/`，內含 `scripts/xdh` 與七份 Markdown 樣板。分工是刻意的：**技能負責判斷，腳本負責可重複的操作**。
+十顆技能（`x-discovery`、`x-plan`、`x-plan-product`、`x-plan-design`、`x-plan-devex`、`x-plan-eng`、`x-review`、`x-debug`、`x-ship`、`x-housekeeping`）共用一份 `commands-src/_x-shared/`，內含 `scripts/xdh`、七份 Markdown 樣板與四份 facet 合約。分工是刻意的：**技能負責判斷，腳本負責可重複的操作**。
 
 `xdh` 的責任邊界：
 
@@ -92,10 +92,19 @@ adapter 的 action contract 固定為：`build <canonical-staging-dir> <artifact
 | `paths` / `init` | 以 `git rev-parse --git-common-dir` 從任一 linked worktree 解析回 main repo，建立 `.dev-hub` 骨架與 `.gitignore` |
 | `cycle new/list/show/check/close` | 建立或沿用 Cycle、關閉前檢查 gate、把完成 Cycle 壓成 `logs/` 短紀錄 |
 | `id next`、`item new`、`wg new`、`artifact new` | 在 `mkdir` 互斥鎖內完成「檢查既有 → 配號 → 建檔」，避免兩個 agent 拿到同一個編號 |
+| `plan init / facet set / decision set / fingerprint / check / ready` | 初始化規劃路由、以 scoped writer 記錄 facet 與 Owner Decision 狀態、計算 planning fingerprint、檢查並放行 new-format 工作項到 `ready` |
+| `design prepare` | 接收三項明確的 Image capability 狀態，依 slug 與 fingerprint 準備（或重用）設計工作目錄，回報 `X_DESIGN_DIR` / `X_DESIGN_REUSED` |
 | `field get/set` | 以 atomic write 改寫單一 `- Field: value`，保留檔案其餘所有內容 |
 | `fingerprint [verify]` | 把整個工作狀態（含未 commit 變更）寫進暫時 index 並取得 tree，作為 review 目標 |
 | `pr status/upsert` | 以 head branch **與 head repository owner** 兩者定位 PR，create-or-update 單一 PR；沒有 `gh` 就回報 `no-provider` 而不是假裝有 PR |
 | `worktree`、`clean scan/apply` | 分類 SAFE / DIRTY / UNMERGED / ACTIVE / ORPHAN，只刪 SAFE，且刪前再檢查一次 |
+
+facet 合約的單一權威來源是 `commands-src/_x-shared/facets/`：四份合約
+（`product` / `design` / `devex` / `engineering`）各只有一份，`x-plan` 以
+symlink 收斂進自己的 `references/<facet>-facet-contract.md`、每個 owning
+specialist 以 symlink 收斂成自己的 `references/facet-contract.md`；`bin/build.sh`
+用 `find -L` + `cp -aL` 解引用，讓 `commands/<skill>/references/` 得到**自給自足
+的真實副本**（與 scripts/templates 相同的決策 #12 收斂方式）。
 
 六個設計選擇值得說明：
 
@@ -159,6 +168,8 @@ commands/                      build 產生的 canonical artifact（.gitignore�
 opencode-commands/             build 產生的 OpenCode v1 command shim（.gitignore）
 install.sh                     相容包裝 → skill-x init
 tests/run.sh                   不需網路的整合測試（`--fast` 只跑常用子集，預設全跑）
+tests/plan-machine-regression.sh 規劃 gate 的機器行為 regression tests
+tests/plan-content-regression.sh 規劃技能內容契約 regression tests
 tests/pr10-safety-regression.sh 擁有權安全性 regression tests
 tests/pr15-regression.sh       target contract 與 legacy pinned-ref regression tests
 tests/lib/harness.sh           共用測試 harness：suite 選擇、計時、逾時、fixture 快取

@@ -134,7 +134,7 @@ always `x-review`, never `x-ship` directly.
 Handover is a protocol carried by the artifacts, not a runtime. The stage order is:
 
 ```text
-Discovery → Engineering Planning → Implementation / Spike Execution
+Discovery → Planning → Implementation / Spike Execution
   → Independent Review → Debug (when needed) → Independent Re-review
   → Ship → Housekeeping (after merge)
 ```

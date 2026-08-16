@@ -1,28 +1,33 @@
 ---
 name: x-plan-eng
-description: Turn registered work into fully defined Issues or Spikes with architecture, data flow, failure modes, tests and acceptance, then assign an Owner and prepare the branch and worktree so implementation can start immediately; use when work needs to be planned to executable depth, either from a discovery hub.md or as a single standalone requirement.
+description: Define the engineering facet of a planning item — architecture, data flow, interfaces, failure modes, tests and acceptance — to executable depth and run the planning gate; use as the engineering specialist inside x-plan orchestration, or standalone (Direct) for engineering-only planning from a discovery hub.md or a single requirement.
 ---
 
 # x-plan-eng
 
-Take work that is merely *named* and define it until an implementer who was not
-part of the planning can start without asking a single question.
+Own the **engineering** facet: take work that is merely named and define the
+implementation until an implementer who was not part of the planning can start
+without asking a single question.
 
-This skill does not write product code and does not perform the final review.
+This skill has two modes. **Direct mode** is the engineering-only planning path
+(route `engineering`); **Engineering Facet mode** runs as the engineering
+specialist inside `x-plan`. Neither mode writes product code, and neither
+performs the final review.
 
 ## When to use
 
-- `x-discovery` produced a `hub.md` and its candidates must become executable work.
-- A single complex requirement needs a full engineering plan, with or without a Dev Hub.
+- `x-plan` dispatches this skill to resolve the engineering facet of one item.
+- Standalone (Direct): a single complex requirement needs a full engineering
+  plan, with or without a Dev Hub.
 
 ## Inputs
 
 The universal contract — prompt, project background, repository documents,
 source code and Git state.
 
-- **Cycle mode:** additionally read `hub.md` and the named `WK-XXX` rows, or
-  every row still marked `ready-for-planning`.
-- **Standalone mode:** the user's requirement *is* the single work item. No
+- **Facet mode:** additionally the item's `Engineering facet` / `Engineering
+  evidence` fields and the completed Product, Design, and DevEx facet sections.
+- **Direct mode:** the user's requirement *is* the single work item. No
   existing `.dev-hub/active/cycle-*` is required.
 
 ## Toolkit
@@ -34,12 +39,14 @@ done
 "$XDH" paths
 ```
 
-`xdh` allocates IDs under a lock, creates documents from the shared templates,
-and makes branch/worktree creation idempotent. Reuse is reported back as
-`X_ITEM_REUSED` / `X_WG_REUSED` — re-running planning for the same work must
-never produce `IS-002` beside an identical `IS-001`.
+The facet contract this skill follows is bundled at `references/facet-contract.md`.
 
-## Required workflow
+## Direct mode (engineering-only planning)
+
+Direct Engineering uses exactly route `engineering`: Product, Design, and DevEx
+are `not-applicable`; Engineering is `completed@<fp>`. It runs the same machine
+gates as the orchestrator but performs no facet dispatch — it is itself the
+engineering facet.
 
 ### 1. Select the work
 
@@ -50,8 +57,8 @@ selection before starting so the Owner can interrupt.
 
 Confirm the current state before proposing a change: existing patterns,
 interfaces, schemas, migrations, configuration, and the tests that already
-cover the area. Cite `file:line`. A question the code answers is never an
-Owner question, and a plan that contradicts the code is worse than no plan.
+cover the area. Cite `file:line`. A question the code answers is never an Owner
+question, and a plan that contradicts the code is worse than no plan.
 
 Also challenge the scope before defining it:
 
@@ -62,7 +69,7 @@ Also challenge the scope before defining it:
   services/classes, treat that as a smell and say so, with a smaller
   alternative, before continuing.
 
-### 3. Classify the work type
+### 3. Classify and create (or reuse) the item
 
 - **`IS-XXX` (Issue)** — enough is known to define the implementation and its
   acceptance criteria.
@@ -70,19 +77,41 @@ Also challenge the scope before defining it:
   experiment, prototype, or investigation first.
 
 ```bash
-"$XDH" item new --type issue --slug "<slug>" --title "<title>" --source WK-003
-"$XDH" item new --type spike --slug "<slug>" --title "<title>" --source WK-004
+"$XDH" item new --type issue --slug "<slug>" --route engineering --selected-work "WK-003" --owner "<owner>"
+"$XDH" item new --type spike --slug "<slug>" --route engineering --selected-work "WK-004" --owner "<owner>"
+```
+
+Reuse is reported back as `X_ITEM_REUSED`. If a reused item is an old-format
+draft (no `Planning route:` field), upgrade it explicitly and idempotently:
+
+```bash
+"$XDH" plan init <item> --route engineering --selected-work "<ids>"
+```
+
+For a reused draft with a blank or placeholder Owner, repair it before the
+two-phase gate:
+
+```bash
+"$XDH" field set <item> Owner "<owner>"
 ```
 
 Standalone mode needs no extra flag: with no Cycle present, planning documents
 land in a shared standalone scope under `.dev-hub/`, which stays put between
-invocations so re-planning the same work reuses it. Pass `--dir <path>` only
-when you deliberately want an isolated bundle — a scope that moves every run
-cannot be reused, and its IDs restart from 001 each time.
+invocations so re-planning the same work reuses it.
 
-### 4. Define an Issue to executable depth
+### 4. Fingerprint and store the input
 
-Fill every section of the generated `IS-XXX` document:
+```bash
+"$XDH" plan fingerprint <item>
+```
+
+Store `X_PLAN_FINGERPRINT` and `X_PLAN_FORMAT` (`x-plan-input-v1` for Issues,
+`x-plan-input-spike-v1` for Spikes) in the item's planning input fingerprint
+field.
+
+### 5. Define the plan to executable depth
+
+Fill the `## Engineering Facet` section of the generated `IS`/`SP` document:
 
 - **Problem / goal**, and who is hurt today by its absence.
 - **Scope in / out** — the out list prevents the drift, so write it.
@@ -102,46 +131,67 @@ Fill every section of the generated `IS-XXX` document:
   "session handling works".
 - **Definition of Ready** — every box checked before the status becomes `ready`.
 
-### 5. Define a Spike to a decision
+A Spike answers exactly **one** decisive question. If it has two, split it:
+state the question, what decision it unblocks, the method, the **decision rule**
+in advance, a timebox, and require a single executable conclusion: `Do this:
+<one action>. Because: <evidence>.` Never a menu of options handed back to the
+executor.
 
-A Spike answers exactly **one** decisive question. If it has two, split it.
-
-- State the question, and what decision it unblocks.
-- State the method: what to inspect, what to prototype, what evidence to collect.
-- State the **decision rule** in advance — which evidence produces which answer.
-  Deciding the rule after seeing the result is how bias enters.
-- Set a timebox.
-- Require a single executable conclusion: `Do this: <one action>. Because:
-  <evidence>.` Never a menu of options handed back to the executor.
-
-### 6. Assign an Owner and a Work Group
-
-Use the real agent or team roster available in this session. Never invent a
-human name. Assigning an Owner creates or joins a Work Group; one work item
-belongs to exactly one WG at a time, and may be reassigned.
-
-Group into one WG only what is genuinely delivered together.
-
-### 7. Prepare the execution environment
+### 6. Record the engineering facet
 
 ```bash
-"$XDH" wg new --slug "<slug>" --title "<title>" --items "IS-001, SP-001" --owner "<owner>"
+"$XDH" plan facet set <item> --facet engineering --status completed@<fp> --evidence <ref>
 ```
 
-This enforces `1 WG = 1 branch = 1 worktree = 1 PR` and is safe to re-run.
-Then set the status of each prepared item:
+Product, Design, and DevEx stay `not-applicable` on the engineering-only route.
+
+### 7. Run the two-phase gate
 
 ```bash
-"$XDH" field set <IS file> Status ready
+"$XDH" plan check <item>
+"$XDH" wg new --slug "<slug>" --items "IS-001" --owner "<owner>"
+"$XDH" plan ready <item>
 ```
+
+`plan check` must report `X_PLAN_CHECK=PASS`; a `BLOCKER...` line with a
+non-zero exit means the plan is not ready — resolve and re-check. `wg new`
+writes the WG id back into the item; `item new --owner` or the explicit reuse
+repair above assigns the item Owner. `plan ready` is the
+only way a new-format item reaches `ready`: do not use the generic `field set`
+to set `Status ready` on a new-format item — the machine layer rejects it and
+directs you back to `xdh plan ready`.
 
 ### 8. Write back and check consistency
 
 Update the `hub.md` work table: formal item, Owner, WG, status. Preserve every
-section you did not author.
+section you did not author. Then verify: could an implementation agent that
+never saw this conversation start each item immediately? If not, the plan is not
+finished.
 
-Then verify: could an implementation agent that never saw this conversation
-start each item immediately? If not, the plan is not finished.
+## Engineering Facet
+
+This is the portion that runs when `x-plan` dispatches `x-plan-eng` as the
+engineering specialist for one item. It must follow
+`references/facet-contract.md`.
+
+The facet reads the item's `Engineering facet` / `Engineering evidence` fields,
+the completed Product / Design / DevEx facet sections (their decisions are its
+constraints), and the repository, then records the engineering plan and writes
+back via the sole Facet-mode writer:
+
+```bash
+xdh plan facet set <item> --facet engineering --status <value> --evidence <ref> [--section-file <f>]
+```
+
+`<value>` is one of `pending | in-progress | blocked |
+completed@<fp>`; Engineering is never `not-applicable`, `deferred-owner`, or
+`deferred-missing`. Completion records `completed@<current fingerprint>`; the
+fingerprint is reported by the read-only `xdh plan fingerprint <item>`.
+
+This facet must never create an item (`item new`), create a Work Group
+(`wg new`), create a worktree or branch, run the generic `field set`, or run
+`plan ready`. The facet's only item mutation is the `xdh plan facet set` write
+above.
 
 ## Owner questions
 
@@ -156,7 +206,7 @@ the alternatives are genuinely close *and* the consequences are hard to reverse.
 ## Handover
 
 - Current state: planning-complete
-- Completed: <IS/SP/WG files, branch, worktree>
+- Completed: <IS/SP/WG files, branch, worktree, fingerprint>
 - Blockers: none | <items>
 - Owner decision: none | <question>
 - Next: implement IS-XXX | execute SP-XXX
@@ -171,7 +221,7 @@ document and `hub.md`; any follow-up work it reveals is registered as new work.
 Handover is a protocol carried by the artifacts, not a runtime. The stage order is:
 
 ```text
-Discovery → Engineering Planning → Implementation / Spike Execution
+Discovery → Planning → Implementation / Spike Execution
   → Independent Review → Debug (when needed) → Independent Re-review
   → Ship → Housekeeping (after merge)
 ```
