@@ -147,11 +147,11 @@ accepted at the current fingerprint.
 A missing capability inside a specialist follows that specialist's downgrade
 rules; it is not the same as a missing specialist. If a selected optional
 specialist (Product, Design, or DevEx) cannot run on the host, never silently
-skip it. Record an Owner Decision about proceeding without that facet; after the
-Owner explicitly accepts, the orchestrator may use the scoped facet writer only
-to record `deferred-missing@<current-fp>` with evidence that the specialist was
-unavailable. Do not synthesize the missing specialist's reasoning. Missing
-Engineering is always blocking.
+skip it. Record a pending Owner Decision about proceeding without that facet;
+after the Owner explicitly accepts, the orchestrator may use the scoped facet
+writer only to record `deferred-missing@<current-fp>` with evidence that the
+specialist was unavailable. Do not synthesize the missing specialist's
+reasoning. Missing Engineering is always blocking.
 
 ## Required workflow
 
@@ -212,6 +212,20 @@ own status through the scoped Facet-mode writer. Batch homogeneous Owner
 decisions into one brief; split genuinely different questions into separate
 groups. A question limit must never silently apply a default to a facet
 decision.
+
+For a Design, DevEx, or Engineering decision that only the Owner can make, the
+specialist returns a decision brief and does **not** mutate the decision table.
+`x-plan` reuses the matching pending OD ID when one exists; otherwise choose the
+next unused `OD-NNN`, then record the pending row before asking:
+
+```bash
+"$XDH" plan decision set <item> --id OD-001 --facet <facet> \
+  --question "<question>" --decision "<recommended answer>" --state pending
+```
+
+Product scope decisions may use Product's contract-defined atomic pending-row
+writer instead. In every case, keep the same OD ID from pending through
+acceptance.
 
 When the Owner answers a pending row, keep the same OD ID. If the answer changes
 a fingerprinted input, follow **Fingerprint discipline** first; otherwise record
