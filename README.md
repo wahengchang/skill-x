@@ -2,15 +2,15 @@
 
 skill-x 是一套參考 Garry Tan 的 gstack 產品形態打造的個人 skill 管理框架。它以 Git repository 作為唯一來源，透過單一入口 `bin/skill-x` 管理整組 skill set 的 install、update 與 uninstall，並將同一組技能同步到 Codex、Claude Code 與 OpenCode；個人電腦使用 symlink 與可選更新，容器 image 則安裝固定版本的副本。
 
-內建的 `x-discovery`、`x-plan-eng`、`x-review`、`x-debug`、`x-ship` 與 `x-housekeeping` 六顆技能，串起設計 → 開發 → ship 的 handover 週期，讓各階段的工作脈絡能持續交接。
+內建的 `x-discovery`、`x-plan`、`x-plan-product`、`x-plan-design`、`x-plan-devex`、`x-plan-eng`、`x-review`、`x-debug`、`x-ship` 與 `x-housekeeping` 十顆技能，串起設計 → 開發 → ship 的 handover 週期，讓各階段的工作脈絡能持續交接。
 
 ### 一眼看懂工作週期
 
 ```text
 ┌────────────── 設計 ──────────────┐   ┌────────────── 開發 ──────────────┐   ┌────────────── Ship ──────────────┐
 │                                  │   │                                  │   │                                  │
-│  x-discovery ───▶ x-plan-eng    ├──▶│  x-debug ◀──────▶ x-review      ├──▶│  x-ship ───▶ x-housekeeping      │
-│  釐清問題           拆解計畫      │   │  修正問題            驗證成果     │   │  交付成果       收尾並準備下一輪   │
+│  x-discovery ───▶ x-plan        ├──▶│  x-debug ◀──────▶ x-review      ├──▶│  x-ship ───▶ x-housekeeping      │
+│  釐清問題           四面向規劃    │   │  修正問題            驗證成果     │   │  交付成果       收尾並準備下一輪   │
 └──────────────────────────────────┘   └──────────────────────────────────┘   └───────────────────┬──────────────┘
            ▲                                                                               │
            └────────────────────────────── 下一個 handover 週期 ────────────────────────────┘
@@ -180,18 +180,24 @@ canonical skill 的唯一來源仍是 `commands-src/<name>/`；不要直接編�
 
 ## `x-*` 開發週期技能組
 
-`x-` 前綴的六顆技能是一整套開發流程：把一次盤點變成 Cycle、把工作準備到可直接開工、由獨立 Agent 審查、以證據除錯、交付成一個 PR，最後把完成的 Cycle 壓成一份短 log。
+`x-` 前綴的十顆技能是一整套開發流程：把一次盤點變成 Cycle、把工作準備到可直接開工、由獨立 Agent 審查、以證據除錯、交付成一個 PR，最後把完成的 Cycle 壓成一份短 log。
 
 | 技能 | 回答的問題 | 主要輸出 |
 | --- | --- | --- |
 | `x-discovery` | 這個範圍內有哪些工作？ | `.dev-hub/active/cycle-*/hub.md` 與 `WK-XXX` 工作總表 |
-| `x-plan-eng` | 每項工作要做什麼、工程上怎麼做？ | `IS-*` / `SP-*` / `WG-*`、Owner、branch 與 worktree |
+| `x-plan` | 如何把工作準備到可直接開工？ | 分派 Product→Design→DevEx→Engineering 四面向，產出 `IS-*` / `SP-*` / `WG-*`、Owner 與 planning fingerprint |
+| `x-plan-product` | 產品面向：目標、範圍、使用者可見行為與優先序？ | 產品決策與證據、pending Owner Decision |
+| `x-plan-design` | 設計面向：UX、互動與能力（Image Generate / Display / Compare）？ | 設計決策、能力階梯與證據 |
+| `x-plan-devex` | DevEx 面向：setup→首次變更→測試→除錯→CI/release 的旅程？ | 各階段可驗證的證據 |
+| `x-plan-eng` | 工程面向：每項工作工程上怎麼做？ | `## Engineering Facet`、架構 / 資料流 / 測試 / 驗收 |
 | `x-review` | 這份最終內容有什麼真實風險？ | `RV-*`（含 severity、`file:line`、失效情境） |
 | `x-debug` | 已知問題的 root cause 是什麼？ | `DBG-*`、根因修正與 regression test |
 | `x-ship` | 能否安全交付，並形成一個 PR？ | commits、pushed branch、create-or-update 的單一 PR |
 | `x-housekeeping` | 哪些執行殘留已可安全刪除？ | 清理結果與 `.dev-hub/logs/cycle-*.md` |
 
-六顆技能都能只憑「專案背景、repo 文件、程式碼、Prompt」獨立啟動，不需要先有 Cycle。使用者輸入 `continue` 時，接續依據是 artifact 裡的 Handover 區塊，沒有隱藏的全域狀態機。
+`x-plan` 是規劃階段的 orchestration 入口：它先解析唯一 scope 與 target，把每項工作依「Product → Design → DevEx → Engineering」的順序分派給對應的 specialist（Engineering 一律 mandatory、永遠最後），每個 facet 以「自己的唯一寫入指令」記錄決策與證據，最後用 `plan check → wg new → plan ready` 這道 gate 讓 new-format 的工作項到達 `ready`。整份計畫綁定在確定性的 planning fingerprint 上，內容一改 fingerprint 就失效。
+
+十顆技能都能只憑「專案背景、repo 文件、程式碼、Prompt」獨立啟動，不需要先有 Cycle。使用者輸入 `continue` 時，接續依據是 artifact 裡的 Handover 區塊，沒有隱藏的全域狀態機。
 
 執行期狀態一律留在 repo 內的 `.dev-hub/`，不寫 `~/.x-*` 或系統 `/tmp`：
 
@@ -240,7 +246,7 @@ make test-full   # 完整組：上面全部 + 生命週期、更新、cloud boot
 
 日常只改技能內容（`commands-src/`、`_shared/`）時跑 `make test` 就夠；改到 `bin/`、`tests/` 或任何腳本行為時請跑 `make test-full`（細節見 CONTRIBUTING.md）。兩組都會列出每個測試的耗時與最慢的前五名，單一測試超過 `SKILL_X_TEST_TIMEOUT`（預設 240 秒）會被中止並標成 `TIMEOUT` 失敗。
 
-`make test-full` 結束時應顯示三行 `RESULT ... 0 failed`（合計 62 個測試）。這能驗證 shell 腳本與檔案行為；Claude Code、Codex CLI、OpenCode 是否實際發現技能，以及 AI 是否依照自然語言指示詢問，仍需分別在三個工具做端到端人工 smoke test：
+`make test-full` 結束時應讓每個已註冊 suite 都顯示 `RESULT ... 0 failed`。這能驗證 shell 腳本與檔案行為；Claude Code、Codex CLI、OpenCode 是否實際發現技能，以及 AI 是否依照自然語言指示詢問，仍需分別在三個工具做端到端人工 smoke test：
 
 1. 執行 `./install.sh` 與 `bin/skill-x doctor`，確認選定的技能路徑與 OpenCode command 區段皆為 `OK`。
 2. 重新啟動三個工具（skills 與 commands 在啟動時載入）。

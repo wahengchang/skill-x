@@ -1,0 +1,1 @@
+../../_x-shared/facets/product-facet-contract.md

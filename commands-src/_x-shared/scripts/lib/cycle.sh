@@ -145,7 +145,7 @@ x_cycle_new() {
   fi
   mkdir -p "$dir/work-items" "$dir/work-groups" \
            "$dir/artifacts/discovery" "$dir/artifacts/reviews" "$dir/artifacts/debug" \
-           "$dir/tmp"
+           "$dir/artifacts/design" "$dir/tmp"
 
   local name; name=$(basename -- "$dir")
   if [[ ! -f $dir/hub.md ]]; then
@@ -192,6 +192,7 @@ x_id_next() {
 
 x_item_new() {
   local type="" slug="" title="" cycle="" source="—" owner="—" wg="—" priority="P2" dir=""
+  local route="" selected_work=""
   while (( $# )); do
     case $1 in
       --type) type=$2; shift 2 ;;
@@ -203,6 +204,8 @@ x_item_new() {
       --owner) owner=$2; shift 2 ;;
       --wg) wg=$2; shift 2 ;;
       --priority) priority=$2; shift 2 ;;
+      --route) route=$2; shift 2 ;;
+      --selected-work) selected_work=$2; shift 2 ;;
       *) x_die "item new: unknown option $1" ;;
     esac
   done
@@ -244,6 +247,14 @@ x_item_new() {
   if [[ $reused == no ]]; then
     id=$(x_id_next "$kind" "$scope_dir")
     file="$target_dir/$id-$slug.md"
+    local norm_route
+    norm_route=$(x_route_normalize "${route:-engineering}") ||
+      x_die "item new: invalid --route '${route:-engineering}'"
+    local pf df vf ef
+    pf=$(x_route_facet_status "$norm_route" product)
+    df=$(x_route_facet_status "$norm_route" design)
+    vf=$(x_route_facet_status "$norm_route" devex)
+    ef=$(x_route_facet_status "$norm_route" engineering)
     x_render_template "$template" \
       ID "$id" \
       TITLE "${title:-$slug}" \
@@ -252,6 +263,12 @@ x_item_new() {
       WG "$wg" \
       SOURCE "$source" \
       CREATED "$(x_now_iso)" \
+      ROUTE "$norm_route" \
+      SELECTED_WORK "${selected_work:-$id}" \
+      PRODUCT_FACET "$pf" \
+      DESIGN_FACET "$df" \
+      DEVEX_FACET "$vf" \
+      ENGINEERING_FACET "$ef" \
       | x_atomic_write "$file"
   fi
   x_unlock

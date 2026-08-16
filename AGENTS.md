@@ -18,7 +18,7 @@
     `bin/` (including `bin/targets/`), `tests/`, `install.sh`, `Makefile`, or
     anything affecting lifecycle (`init`/`install`/`sync`/`update`/`uninstall`),
     Git update checks, cloud bootstrap, target adapters, or `xdh` behavior. It
-    runs all 61 integration and regression tests.
+    runs every registered integration and regression suite.
   - When in doubt, run `make test-full`; it is the release-quality gate.
   - Both suites print per-test elapsed time and a slowest-cases summary, and
     terminate any single test that exceeds `SKILL_X_TEST_TIMEOUT` (default

@@ -390,7 +390,7 @@ test_cloud_bootstrap_installs_command_shims() {
   [[ -f "$home_v2/.config/opencode/skills/example-skill/SKILL.md" ]]
 }
 
-X_SKILLS=(x-discovery x-plan-eng x-review x-debug x-ship x-housekeeping)
+X_SKILLS=(x-discovery x-plan x-plan-eng x-plan-product x-plan-design x-plan-devex x-review x-debug x-ship x-housekeeping)
 
 test_build_materializes_shared_skill_assets() {
   local project="$TEST_ROOT/x-assets"
@@ -411,6 +411,19 @@ test_build_materializes_shared_skill_assets() {
   # The shared source directory is not itself a skill.
   [[ ! -e "$project/commands/_x-shared" ]]
   [[ ! -e "$project/opencode-commands/_x-shared.md" ]]
+
+  # Facet contracts are materialized as real self-contained copies in x-plan and
+  # in every specialist that owns one, from the single shared canonical source.
+  local facet
+  for facet in product design devex engineering; do
+    [[ -f "$project/commands/x-plan/references/$facet-facet-contract.md" ]]
+    [[ ! -L "$project/commands/x-plan/references/$facet-facet-contract.md" ]]
+  done
+  local specialist
+  for specialist in x-plan-eng x-plan-product x-plan-design x-plan-devex; do
+    [[ -f "$project/commands/$specialist/references/facet-contract.md" ]]
+    [[ ! -L "$project/commands/$specialist/references/facet-contract.md" ]]
+  done
 }
 
 # Build the project, then hand back a throwaway Git repository plus the path to
@@ -465,6 +478,7 @@ test_xdh_work_group_binds_branch_and_worktree() {
   local xdh="$project/commands/x-plan-eng/scripts/xdh"
 
   (cd "$repo" && "$xdh" cycle new --slug auth >/dev/null)
+  (cd "$repo" && "$xdh" item new --type issue --slug login-item >/dev/null)
   local first second worktree
   first=$(cd "$repo" && "$xdh" wg new --slug login --items IS-001)
   rg -q '^X_WG_ID=WG-001$' <<<"$first"
@@ -798,14 +812,25 @@ EOF
 test_xdh_pr_lookup_distinguishes_forks() {
   local project="$TEST_ROOT/xdh-pr" repo="$TEST_ROOT/xdh-pr-repo"
   local bin="$TEST_ROOT/xdh-pr-bin"
+  local no_gh_bin="$TEST_ROOT/xdh-pr-no-gh-bin"
   make_xdh_fixture "$project" "$repo"
   local xdh="$project/commands/x-ship/scripts/xdh"
   git -C "$repo" checkout -q -b fix
   git -C "$repo" remote add origin 'git@github.com:contributor/skill-x.git'
 
   # Without a provider the answer is "no provider", never an invented PR.
+  # Do not assume gh lives outside /usr/bin: GitHub Actions installs it there.
+  # Give xdh only the executables this path needs, in a private directory that
+  # deliberately contains no gh binary.
+  mkdir -p "$no_gh_bin"
+  local tool
+  for tool in git dirname readlink; do
+    ln -s "$(command -v "$tool")" "$no_gh_bin/$tool"
+  done
+  local bash_bin
+  bash_bin=$(command -v bash)
   rg -q '^X_PR_STATE=no-provider$' \
-    <<<"$(cd "$repo" && PATH=/usr/bin:/bin "$xdh" pr status)"
+    <<<"$(cd "$repo" && PATH="$no_gh_bin" "$bash_bin" "$xdh" pr status)"
 
   # Two forks have an open PR from a branch called `fix`. Matching on the
   # branch name alone would pick whichever came first and overwrite it.
@@ -853,12 +878,12 @@ test_xdh_keeps_every_temporary_file_inside_the_project() {
   local item
   item=$(run_xdh_without_tmpdir item new --type issue --slug thing |
          rg -N --replace '$1' '^X_ITEM_FILE=(.*)$')
-  run_xdh_without_tmpdir field set "$item" Status ready >/dev/null
+  run_xdh_without_tmpdir field set "$item" Priority P1 >/dev/null
   run_xdh_without_tmpdir fingerprint >/dev/null
   run_xdh_without_tmpdir wg new --slug tmp-wg >/dev/null
 
   [[ ! -e $forbidden ]]
-  rg -q '^- Status: ready$' "$item"
+  rg -q '^- Priority: P1$' "$item"
   # Nothing is left behind beside the documents that were staged, either.
   [[ -z $(find "$repo/.dev-hub" -name '.xdh-field.*') ]]
   [[ -z $(find "$repo/.dev-hub" -name '.xdh-write.*') ]]

@@ -39,6 +39,8 @@ XDH_TEMPLATES=$(cd -- "$XDH_DIR/.." && pwd)/templates
 . "$XDH_LIB/pr.sh"
 # shellcheck source=lib/clean.sh
 . "$XDH_LIB/clean.sh"
+# shellcheck source=lib/plan.sh
+. "$XDH_LIB/plan.sh"
 
 x_usage() {
   cat <<'EOF'
@@ -70,6 +72,15 @@ Work
 Documents
   xdh field get <file> <Field>
   xdh field set <file> <Field> <value>
+
+Plan gate
+  xdh plan init <file> --route R --selected-work IDs
+  xdh plan fingerprint <file>
+  xdh plan facet set <file> --facet F --status S --evidence E [--section-file F] [--owner-decision-file F]
+  xdh plan decision set <file> --id OD-NNN --facet F --question Q --decision D --state S
+  xdh plan check <file>
+  xdh plan ready <file>
+  xdh design prepare --slug S --fingerprint FP --image-generate A --image-display A --image-compare A [--cycle C|--dir D]
 
 Review target
   xdh fingerprint [--base B]
@@ -146,9 +157,45 @@ x_cmd_field() {
   local sub=${1:-}; shift || true
   case $sub in
     get) (( $# == 2 )) || x_die "field get <file> <Field>"; x_field_get "$1" "$2" ;;
-    set) (( $# == 3 )) || x_die "field set <file> <Field> <value>"; x_field_set "$1" "$2" "$3"
-         x_emit X_FIELD_SET "$2" ;;
+    set)
+      (( $# == 3 )) || x_die "field set <file> <Field> <value>"
+      x_plan_guard_ready "$1" "$2" "$3"
+      x_field_set "$1" "$2" "$3"
+      x_emit X_FIELD_SET "$2" ;;
     *) x_die "field: unknown subcommand '${sub:-}'" ;;
+  esac
+}
+
+x_cmd_plan() {
+  local sub=${1:-}; shift || true
+  case $sub in
+    init) x_plan_init "$@" ;;
+    fingerprint) x_plan_fingerprint "$@" ;;
+    facet)
+      [[ ${1:-} == set ]] || x_die "plan facet: expected 'set'"
+      shift
+      x_plan_facet_set "$@" ;;
+    decision)
+      [[ ${1:-} == set ]] || x_die "plan decision: expected 'set'"
+      shift
+      x_plan_decision_set "$@" ;;
+    check) x_plan_check "$@" ;;
+    ready) x_plan_ready "$@" ;;
+    *) x_die "plan: unknown subcommand '${sub:-}'" ;;
+  esac
+}
+
+x_cmd_plan_facet() {
+  local sub=${1:-}; shift || true
+  [[ $sub == set ]] || x_die "plan facet: unknown subcommand '${sub:-}'"
+  x_plan_facet_set "$@"
+}
+
+x_cmd_design() {
+  local sub=${1:-}; shift || true
+  case $sub in
+    prepare) x_design_prepare "$@" ;;
+    *) x_die "design: unknown subcommand '${sub:-}'" ;;
   esac
 }
 
@@ -231,6 +278,8 @@ main() {
     runtime) x_cmd_runtime "$@" ;;
     field) x_cmd_field "$@" ;;
     fingerprint) x_cmd_fingerprint "$@" ;;
+    plan) x_cmd_plan "$@" ;;
+    design) x_cmd_design "$@" ;;
     pr) x_cmd_pr "$@" ;;
     worktree) x_cmd_worktree "$@" ;;
     clean) x_cmd_clean "$@" ;;

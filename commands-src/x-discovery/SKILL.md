@@ -11,8 +11,8 @@ Discovery answers **"what work exists here?"** — never **"how do we build it?"
 ```text
 Cycle                       one container for one round of inventory
 ├── hub.md                  the Owner-readable source of truth
-├── Work Items              IS-XXX / SP-XXX     (created later by x-plan-eng)
-└── Work Groups             WG-XXX              (created later by x-plan-eng)
+├── Work Items              IS-XXX / SP-XXX     (created later by x-plan)
+└── Work Groups             WG-XXX              (created later by x-plan)
 ```
 
 ## When to use
@@ -23,7 +23,7 @@ Cycle                       one container for one round of inventory
 - Examples: enumerate every front-end and back-end task in the login flow;
   find the components whose failure would be most expensive.
 
-Do not use this for full engineering design of a single item (`x-plan-eng`),
+Do not use this for full engineering design of a single item (`x-plan`),
 for implementation, for review, or for debugging.
 
 ## Inputs
@@ -93,7 +93,7 @@ One row per candidate, numbered `WK-001`, `WK-002`, …:
 
 - **Why** is the evidence, not a restatement of the title.
 - **Risk** is what breaks, and how expensively, if this is left alone.
-- **Type hint** is `issue` or `spike` — a hint only; `x-plan-eng` makes the
+- **Type hint** is `issue` or `spike` — a hint only; `x-plan` makes the
   formal classification.
 - **Formal item / Owner / WG** stay `—` here. Discovery never creates IS/SP/WG
   documents, branches, or worktrees.
@@ -106,7 +106,7 @@ Ask for the next free number rather than guessing:
 
 ### 5. Triage every candidate
 
-- `ready-for-planning` — enough is known to hand it to `x-plan-eng`.
+- `ready-for-planning` — enough is known to hand it to `x-plan`.
 - `owner-decision` — only the Owner can settle it. Record it in the Owner
   Decisions table **with a recommended answer**.
 - `no-action` — already done, duplicated, or out of scope. Say which.
@@ -134,11 +134,11 @@ End with this block, and mirror it at the end of `hub.md`:
 - Completed: <cycle path, work table size, evidence written>
 - Blockers: none | <items>
 - Owner decision: none | <question>
-- Next: x-plan-eng
+- Next: x-plan
 - Target: <Cycle name / WK IDs>
 ```
 
-If nothing blocks, `continue` proceeds to `x-plan-eng` for all
+If nothing blocks, `continue` proceeds to `x-plan` for all
 `ready-for-planning` rows.
 
 ## Continuing
@@ -146,7 +146,7 @@ If nothing blocks, `continue` proceeds to `x-plan-eng` for all
 Handover is a protocol carried by the artifacts, not a runtime. The stage order is:
 
 ```text
-Discovery → Engineering Planning → Implementation / Spike Execution
+Discovery → Planning → Implementation / Spike Execution
   → Independent Review → Debug (when needed) → Independent Re-review
   → Ship → Housekeeping (after merge)
 ```

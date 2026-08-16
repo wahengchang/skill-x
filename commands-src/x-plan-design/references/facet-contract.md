@@ -1,0 +1,1 @@
+../../_x-shared/facets/design-facet-contract.md

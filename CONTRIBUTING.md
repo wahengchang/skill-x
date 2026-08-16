@@ -91,6 +91,8 @@ bin/build.sh
 
 代價是 `commands/` 底下會出現多份相同副本——那是 disposable artifact，跟注入的更新檢查標頭一樣，不需要 commit。
 
+同理，`x-*` 的四份 facet 合約（`product` / `design` / `devex` / `engineering`）也只在 `commands-src/_x-shared/facets/` 各放一份，當作單一權威來源。`x-plan` 用 symlink 把它們收斂成自己的 `references/<facet>-facet-contract.md`，每個 owning specialist（`x-plan-product` / `x-plan-design` / `x-plan-devex` / `x-plan-eng`）則收斂成自己的 `references/facet-contract.md`；`bin/build.sh` 一樣解引用成真實副本，所以執行期每顆技能都讀得到自己那份，不依賴兄弟技能。
+
 ### 測試：`make test`（快）vs. `make test-full`（全）
 
 測試分成兩組，差別只在「你改了什麼」，不是「你有多趕」：
@@ -98,7 +100,7 @@ bin/build.sh
 | 指令 | 內容 | 什麼時候用 |
 |---|---|---|
 | `make test`（等同 `make test-fast`） | `tests/run.sh --fast`：canonical build、header 注入、OpenCode shim 產生、共用資產 materialize、artifact gitignore 檢查、sync 冒煙測試、harness timeout 自檢 | **低風險改動**：只動 `commands-src/**/SKILL.md`、技能的支援檔、`_shared/update-check-header.md`、文件 |
-| `make test-full` | `tests/run.sh --full` + `tests/pr10-safety-regression.sh` + `tests/pr15-regression.sh`，共 61 個測試 | **其餘一律用這個**：動到 `bin/`（含 `bin/targets/`）、`tests/`、`install.sh`、`Makefile`，或任何影響 install/sync/update/uninstall 生命週期、Git 更新檢查、cloud bootstrap、target adapter、`xdh` 行為的改動 |
+| `make test-full` | `tests/run.sh --full` + `tests/plan-machine-regression.sh` + `tests/plan-content-regression.sh` + `tests/pr10-safety-regression.sh` + `tests/pr15-regression.sh`，執行所有已註冊測試 | **其餘一律用這個**：動到 `bin/`（含 `bin/targets/`）、`tests/`、`install.sh`、`Makefile`，或任何影響 install/sync/update/uninstall 生命週期、Git 更新檢查、cloud bootstrap、target adapter、`xdh` 行為的改動 |
 
 不確定就跑 `make test-full`——它才是送出前的完整把關。
 

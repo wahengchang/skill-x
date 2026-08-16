@@ -10,6 +10,24 @@ x_die() { printf 'xdh: %s\n' "$*" >&2; exit 1; }
 x_warn() { printf 'xdh: %s\n' "$*" >&2; }
 x_emit() { printf '%s=%s\n' "$1" "$2"; }
 
+# Emit a document as logical LF-terminated lines regardless of whether its
+# physical line endings are LF, CRLF, or bare CR. This is a read-only view:
+# writers still preserve the target document's original convention.
+x_normalized_lines() {
+  local file=$1
+  [[ -f $file ]] || x_die "no such file: $file"
+  LC_ALL=C awk '
+    BEGIN { RS = "\034"; ORS = "" }
+    {
+      text = $0
+      gsub(/\r\n/, "\n", text)
+      gsub(/\r/, "\n", text)
+      printf "%s", text
+      if (text !~ /\n$/) printf "\n"
+    }
+  ' "$file"
+}
+
 # Lowercase ASCII, digits and single hyphens only, trimmed to 48 characters.
 x_slugify() {
   local raw=$1 out
@@ -143,14 +161,13 @@ x_template() { printf '%s/%s.md' "$XDH_TEMPLATES" "$1"; }
 x_field_get() {
   local file=$1 name=$2
   [[ -f $file ]] || x_die "no such file: $file"
-  awk -v name="$name" '
-    { sub(/\r$/, "") }
+  x_normalized_lines "$file" | awk -v name="$name" '
     $0 ~ "^- " name ":" {
       sub("^- " name ":[[:space:]]*", "")
       print
       exit
     }
-  ' "$file"
+  '
 }
 
 # Replace a `- Field: value` bullet in place, preserving every other byte.
@@ -163,8 +180,8 @@ x_field_set() {
   tmp=$(mktemp "$(dirname -- "$file")/.xdh-field.XXXXXX")
   awk -v name="$name" -v value="$value" '
     BEGIN { done = 0 }
-    { sub(/\r$/, "") }
-    !done && $0 ~ "^- " name ":" { print "- " name ": " value; done = 1; next }
+    { clean = $0; sub(/\r$/, "", clean); eol = ($0 ~ /\r$/ ? "\r" : "") }
+    !done && clean ~ "^- " name ":" { print "- " name ": " value eol; done = 1; next }
     { print }
     END { if (!done) exit 9 }
   ' "$file" > "$tmp" || { rm -f "$tmp"; x_die "field not found in $file: $name"; }
@@ -210,4 +227,129 @@ x_join() {
 
 x_require_value() {
   [[ -n ${2:-} ]] || x_die "missing required option: $1"
+}
+
+# Normalize a planning route into its canonical form: lowercase, comma-separated,
+# no spaces, no duplicates, `engineering` present exactly once and last. Tokens
+# product/design/devex may appear at most once each. Prints the canonical route
+# or exits 1 with a clear message on invalid input.
+x_route_normalize() {
+  local raw=$1 token out="" IFS=','
+  local c_product=0 c_design=0 c_devex=0 c_engineering=0
+  local -a tokens
+  read -r -a tokens <<< "$raw"
+  for token in "${tokens[@]}"; do
+    token=${token#"${token%%[![:space:]]*}"}
+    token=${token%"${token##*[![:space:]]}"}
+    [[ -n $token ]] || { printf 'xdh: route: empty token\n' >&2; return 1; }
+    token=$(printf '%s' "$token" | tr '[:upper:]' '[:lower:]')
+    case $token in
+      product) c_product=$(( c_product + 1 )) ;;
+      design) c_design=$(( c_design + 1 )) ;;
+      devex) c_devex=$(( c_devex + 1 )) ;;
+      engineering) c_engineering=$(( c_engineering + 1 )) ;;
+      *) printf 'xdh: route: unknown facet "%s"\n' "$token" >&2; return 1 ;;
+    esac
+  done
+  if (( c_engineering != 1 )); then
+    printf 'xdh: route: engineering must appear exactly once\n' >&2
+    return 1
+  fi
+  if (( c_product > 1 || c_design > 1 || c_devex > 1 )); then
+    printf 'xdh: route: duplicate facet\n' >&2
+    return 1
+  fi
+  (( c_product )) && out+="product,"
+  (( c_design )) && out+="design,"
+  (( c_devex )) && out+="devex,"
+  out+="engineering"
+  printf '%s' "$out"
+}
+
+# Print `pending` when the facet token is present in the canonical route, else
+# `not-applicable`.
+x_route_facet_status() {
+  local route=$1 facet=$2 IFS=',' token
+  local -a tokens
+  read -r -a tokens <<< "$route"
+  for token in "${tokens[@]}"; do
+    [[ $token == "$facet" ]] && { printf 'pending'; return 0; }
+  done
+  printf 'not-applicable'
+}
+
+# Replace multiple `- Field: value` bullets in one awk pass and one atomic
+# replacement. All named fields must exist, else nothing changes.
+x_fields_set() {
+  local file=$1; shift
+  [[ -f $file ]] || x_die "no such file: $file"
+  [[ $(( $# % 2 )) -eq 0 ]] || x_die "x_fields_set: name/value pairs required"
+  local names="" values="" sep=$'\037'
+  while (( $# )); do
+    names="${names}${names:+$sep}$1"
+    values="${values}${values:+$sep}$2"
+    shift 2
+  done
+  local tmp
+  tmp=$(mktemp "$(dirname -- "$file")/.xdh-field.XXXXXX")
+  awk -v names="$names" -v values="$values" -v sep="$sep" '
+    BEGIN { n = split(names, nm, sep); split(values, val, sep); for (i = 1; i <= n; i++) done[i] = 0 }
+    { clean = $0; sub(/\r$/, "", clean); eol = ($0 ~ /\r$/ ? "\r" : "") }
+    {
+      for (i = 1; i <= n; i++) {
+        if (!done[i] && clean ~ "^- " nm[i] ":") {
+          print "- " nm[i] ": " val[i] eol
+          done[i] = 1
+          next
+        }
+      }
+      print
+    }
+    END { for (i = 1; i <= n; i++) if (!done[i]) exit 9 }
+  ' "$file" > "$tmp" || { rm -f "$tmp"; x_die "field not found in $file"; }
+  x_atomic_write "$file" < "$tmp"
+  rm -f "$tmp"
+}
+
+# Insert a block (multi-line string) immediately after the `- Field:` bullet.
+# The block is staged to a file and read with getline: BSD awk rejects newlines
+# inside a -v assignment.
+x_insert_after_field() {
+  local file=$1 field=$2 block=$3 tmp blockfile
+  [[ -f $file ]] || x_die "no such file: $file"
+  tmp=$(mktemp "$(dirname -- "$file")/.xdh-field.XXXXXX")
+  blockfile=$(mktemp "$(dirname -- "$file")/.xdh-block.XXXXXX")
+  printf '%s' "$block" > "$blockfile"
+  awk -v field="$field" -v blockfile="$blockfile" '
+    { sub(/\r$/, ""); print }
+    !done && $0 ~ "^- " field ":" {
+      while ((getline line < blockfile) > 0) print line
+      close(blockfile)
+      done = 1
+    }
+    END { if (!done) exit 9 }
+  ' "$file" > "$tmp" || { rm -f "$tmp" "$blockfile"; x_die "field not found: $field"; }
+  x_atomic_write "$file" < "$tmp"
+  rm -f "$tmp" "$blockfile"
+}
+
+# Insert a block immediately before an exact `## Heading` line.
+x_insert_before_heading() {
+  local file=$1 heading=$2 block=$3 tmp blockfile
+  [[ -f $file ]] || x_die "no such file: $file"
+  tmp=$(mktemp "$(dirname -- "$file")/.xdh-field.XXXXXX")
+  blockfile=$(mktemp "$(dirname -- "$file")/.xdh-block.XXXXXX")
+  printf '%s' "$block" > "$blockfile"
+  awk -v heading="$heading" -v blockfile="$blockfile" '
+    { sub(/\r$/, "") }
+    !done && $0 == heading {
+      while ((getline line < blockfile) > 0) print line
+      close(blockfile)
+      done = 1
+    }
+    { print }
+    END { if (!done) exit 9 }
+  ' "$file" > "$tmp" || { rm -f "$tmp" "$blockfile"; x_die "heading not found: $heading"; }
+  x_atomic_write "$file" < "$tmp"
+  rm -f "$tmp" "$blockfile"
 }
