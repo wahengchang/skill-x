@@ -84,7 +84,62 @@ When dispatching a specialist, hand it the contract that belongs to its facet.
 The running specialist then reads its own `references/facet-contract.md` — the
 same canonical file, bundled separately.
 
+## Write boundary
+
+Every field of an `IS` / `SP` document has exactly one writer. The orchestrator
+owns the lifecycle; a facet owns its own two fields and its own section, and
+nothing else:
+
+```text
+IS-XXX / SP-XXX
+  header ─ Owner ────────────── x-plan        field set <item> Owner
+         ─ Planning route ───── x-plan        item new | plan init
+         ─ Selected work ────── x-plan        item new | plan init
+         ─ WG ───────────────── x-plan        wg new --items
+         ─ Planning input fingerprint ─ xdh   plan check
+         ─ Planning Complete ── xdh           plan check
+         ─ Execution Ready ──── xdh           plan ready
+         ─ Status ───────────── xdh           plan ready   (never field set)
+         ─ <Facet> facet ─────┐ specialist    plan facet set --facet <facet>
+         ─ <Facet> evidence ──┘
+  body   ─ ## <Facet> Facet ─── specialist    plan facet set [--section-file]
+         ─ ## Owner Decisions ─ x-plan        plan decision set
+                                product facet may add one pending row,
+                                atomically with its own blocked status
+```
+
+A facet never creates an item, a Work Group, a branch, or a worktree, never runs
+the generic `field set`, and never runs `plan ready`. If a facet needs one of
+those, it stops and hands back to `x-plan`.
+
 ## Required workflow
+
+The eight steps below are one gated pipeline. The order of the last three is
+load-bearing: `wg new` must happen between `plan check` and `plan ready`,
+because `plan ready` re-verifies the WG, its branch, and its worktree.
+
+```text
+draft item
+   │ item new | plan init          route + Selected work
+   ▼
+plan fingerprint ──▶ <fp>          every facet records completed@<fp>
+   │
+   ▼
+product? ─▶ design? ─▶ devex? ─▶ engineering (mandatory, always last)
+   │                                    │
+   │                                    ▼
+   │  fix and re-check          plan check ──BLOCKER…──▶ not ready
+   └────────────────────────────────┘   │ PASS
+                                        ▼  stamps Planning Complete@<fp>
+                                    wg new --items       branch + worktree + WG
+                                        │
+                                        ▼
+                                    plan ready ──▶ Status: ready
+```
+
+Any edit to a fingerprint input between `plan check` and `plan ready` changes
+`<fp>`, so every `completed@<old fp>` goes stale and the gate re-opens. That is
+the intended behavior, not a failure.
 
 ### 1. Resolve scope, target, and route
 
@@ -125,6 +180,27 @@ Store `X_PLAN_FINGERPRINT` and `X_PLAN_FORMAT` (`x-plan-input-v1` for Issues,
 `x-plan-input-spike-v1` for Spikes) in the item's planning input fingerprint
 field. Every facet records `completed@<this fingerprint>` so the whole plan is
 bound to the same content.
+
+The fingerprint covers the *planning input* only — what the facets were asked
+to solve — never their answers:
+
+```text
+          ┌──────────────────── hashed ────────────────────┐
+          │ format · route · selected-work                 │
+IS-XXX ──▶│ ## Problem / Goal                              │──▶ sha256 ──▶ <fp>
+          │ ## Scope                                       │
+          │ ## Current → Desired Behavior                  │
+          └───────────────────────────────────────────────┘
+SP-XXX ──▶  same three head lines, then ## Core Question ·
+            ## Scope / Timebox · ## Method · ## Decision Rule
+            (a Spike's route is always exactly `engineering`)
+
+not hashed:  <Facet> facet · <Facet> evidence · ## <Facet> Facet ·
+             Owner · WG · Status
+```
+
+So one facet writing its own section never invalidates another facet's
+`completed@<fp>`, while re-scoping the work invalidates all of them at once.
 
 ### 4. Dispatch the facets in order
 

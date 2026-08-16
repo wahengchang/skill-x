@@ -79,6 +79,25 @@ independently and records each as `available` or `unavailable`. A missing
 capability downgrades the design rather than blocks it; the facet blocks only
 when a required user decision cannot be obtained.
 
+Three separate probes, three separate verdicts — never one "images work" flag,
+and never a guess from the host's name:
+
+```text
+  inspect this host's tools
+        │
+        ├─ Image Generate ─▶ available | unavailable  + evidence
+        ├─ Image Display  ─▶ available | unavailable  + evidence
+        └─ Image Compare  ─▶ available | unavailable  + evidence
+                 │
+                 ▼  recorded as the capability ladder in ## Design Facet
+        any unavailable ─▶ downgrade: design for the set that exists,
+                           name what was dropped, keep going
+        user decision unobtainable ─▶ blocked   ← the only way this facet blocks
+```
+
+So "Compare unavailable" produces a design that never asks the user to diff two
+images; it does not produce a blocked facet and does not stall the plan.
+
 This facet must never create an item (`item new`), create a Work Group
 (`wg new`), create a worktree or branch, run the generic `field set`, or run
 `plan ready`. The facet's only item mutation is the `xdh plan facet set` write

@@ -14,6 +14,26 @@ This skill has two modes. **Direct mode** is the engineering-only planning path
 specialist inside `x-plan`. Neither mode writes product code, and neither
 performs the final review.
 
+The engineering *thinking* is identical in both; what differs is who owns the
+lifecycle around it. Decide which mode you are in before the first write:
+
+```text
+user invokes this skill directly
+   └─▶ Direct mode ── route `engineering`, P/D/DX = not-applicable
+         item new → plan fingerprint → engineering facet → the two-phase gate
+         (check → wg new → ready).  This skill owns every step.
+
+x-plan dispatches this skill for one item
+   └─▶ Engineering Facet mode ── route is whatever x-plan resolved
+         read the item + the completed Product / Design / DevEx sections,
+         then one single write:  plan facet set --facet engineering
+         No item, no WG, no branch, no worktree, no gate — x-plan runs those.
+```
+
+Engineering is mandatory on every route and always last, so in Facet mode the
+other facets' decisions are already fixed: they are constraints to satisfy, not
+material to revisit.
+
 ## When to use
 
 - `x-plan` dispatches this skill to resolve the engineering facet of one item.

@@ -62,6 +62,27 @@ never expands, reduces, or redefines scope on its own authority.
 
 After the Owner answers, the orchestrator accepts that same decision ID with
 `xdh plan decision set` at the current fingerprint before Product completes.
+One decision row therefore passes through three hands:
+
+```text
+ scope change spotted
+   │ product facet — one atomic write: pending row + blocked status
+   ▼
+ | OD-001 | product | <question> | <recommendation> | pending  | —    |
+   │ Owner answers (the orchestrator asks; a facet never defaults one)
+   ▼ orchestrator — plan decision set --id OD-001 --state accepted@<fp>
+ | OD-001 | product | <question> | <owner answer>   | accepted@fp | fp |
+   │
+   ▼ product facet — plan facet set --status completed@<fp>
+
+ still pending when the gate runs   ─▶ BLOCKER decision=OD-001 state=pending
+ accepted@<older fp>, product routed ─▶ BLOCKER stale-product re-anchor-required
+```
+
+The ID is the key: reuse `OD-001` for the same question, never renumber it. An
+identical re-run is a no-op; any other collision on that ID is rejected. A
+`deferred-owner@<fp>` / `deferred-missing@<fp>` product status only passes the
+gate when an accepted product decision exists at that same `<fp>`.
 
 This facet must never create an item (`item new`), create a Work Group
 (`wg new`), create a worktree or branch, run the generic `field set`, or run

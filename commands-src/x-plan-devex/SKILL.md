@@ -60,6 +60,24 @@ The devex facet records evidence for the full journey — setup → first change
 test → debug → CI/release — each stage backed by real evidence, never an
 assumption.
 
+The journey is a chain: a stage without evidence is a hole in it, and a hole is
+reported rather than filled in:
+
+```text
+ setup ──▶ first change ──▶ test ──▶ debug ──▶ CI/release
+   │            │            │        │            │
+   └────────────┴──── each stage cites one real thing ────┴────┐
+                      a command that ran · a config file that   │
+                      exists · a pipeline step that is defined  │
+                                                                │
+   stage cannot be verified ────────────────────────────────────┘
+        └─▶ record the gap in ## DevEx Facet, or raise it as an
+            Owner Decision — never close it with a plausible guess
+```
+
+A gap that is written down still lets the plan proceed; a gap that was guessed
+at reaches the implementer as a fact and costs them the debugging session.
+
 This facet must never create an item (`item new`), create a Work Group
 (`wg new`), create a worktree or branch, run the generic `field set`, or run
 `plan ready`. The facet's only item mutation is the `xdh plan facet set` write
