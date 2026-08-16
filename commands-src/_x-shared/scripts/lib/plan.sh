@@ -209,7 +209,11 @@ x_plan_has_content() {
       sub(/[ \t]+$/, "", line)
       if (line == "") next
       if (line ~ /^<[^>]+>$/) next
-      if (line ~ /^#{1,6}([ \t]|$)/) next
+      # An ATX heading (1-6 leading hashes, then space/tab or end of line).
+      # Written without an interval: some mawk builds miscompile
+      # `^#{1,6}([ \t]|$)` (REcompile panic), which would make every section
+      # look empty and block the planning gate on that machine.
+      if ((line ~ /^#+[ \t]/ || line ~ /^#+$/) && line !~ /^#######/) next
       if (line ~ /^\x60\x60\x60/ || line ~ /^~~~/) next
       if (line ~ /^\|/) next
       if (line ~ /^[-*_][-* _]*$/) next
@@ -262,7 +266,9 @@ x_plan_scope_complete() {
     in_scope {
       line = $0
       sub(/[ \t]+$/, "", line)
-      if (line == "" || line ~ /^#{1,6}([ \t]|$)/ || line ~ /^\x60\x60\x60/ || line ~ /^~~~/ ||
+      # The heading test avoids an interval for the same mawk reason as above.
+      if (line == "" || ((line ~ /^#+[ \t]/ || line ~ /^#+$/) && line !~ /^#######/) ||
+          line ~ /^\x60\x60\x60/ || line ~ /^~~~/ ||
           line ~ /^\|/ || line ~ /^<[^>]+>$/ || line == "-" || line == "—") next
       if (part == "in") content_in = 1
       if (part == "out") content_out = 1
