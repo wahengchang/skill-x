@@ -165,6 +165,11 @@ item's file path, its facet name, the matching contract from `references/`, and
 the current fingerprint it must anchor to. A specialist that has to guess the
 fingerprint will guess a stale one.
 
+Re-read the fingerprint before each dispatch, and when a specialist returns,
+check that it wrote only its own field, evidence, and section, and that any
+completion is bound to the fingerprint you just read. Never carry a stale
+completion forward because the prose still looks right.
+
 Batch homogeneous Owner decisions into one brief; split genuinely different
 questions into separate groups. A question limit is not a licence to guess: it
 must never silently apply a default to a facet decision.
@@ -184,10 +189,24 @@ using the same OD ID — never edit the table with a generic text rewrite:
 
 Only `product` may open its own row, atomically with its blocked status. For
 design, devex, and engineering the specialist reports the question and blocks;
-the orchestrator opens the row. A facet that ends `deferred-owner@<fp>` or
-`deferred-missing@<fp>` needs an accepted decision for that same facet at that
-same fingerprint, otherwise `plan check` rejects it as
-`facet=<f> status=deferred-unaccepted`.
+the orchestrator opens the row.
+
+If the Owner's answer changes a fingerprinted input, apply the canonical edit
+**before** recording the acceptance: the pending row survives the edit — its
+fingerprint cell is `—` — so the pending → accepted transition then lands on the
+new fingerprint in one move, and the affected facets are re-run from the
+earliest one touched. Accepting first and editing after is what strands a row
+(see *Re-anchoring*).
+
+A facet that ends `deferred-owner@<fp>` or `deferred-missing@<fp>` needs an
+accepted decision **carrying that same facet name** at that same fingerprint,
+otherwise `plan check` rejects it as `facet=<f> status=deferred-unaccepted`.
+"Ship without the design facet?" is a design row, not a product one, however
+product-shaped the question feels. `deferred-owner` is an Owner-sanctioned skip;
+`deferred-missing` is for a specialist that cannot run on this host at all —
+never for a capability missing *inside* a specialist, which downgrades its
+method rather than its status. Never synthesize the missing specialist's
+reasoning yourself.
 
 ### 5. Check the plan
 
@@ -249,17 +268,23 @@ A shared section edited after a facet completed shows up at the next check as
 force past it; re-anchor deliberately:
 
 1. Re-read the fingerprint with `plan fingerprint` and take the new value.
-2. Have each completed facet re-record itself at the new fingerprint. A facet
-   whose reasoning genuinely changed is re-run, not restamped.
-3. Accepted Owner Decisions cannot be moved. The writer permits only
-   pending → accepted, so re-accepting the same OD ID at a new fingerprint fails
-   with `decision=<id> status=id-collision`. Carry the answer forward under a
-   fresh OD ID, starting from a pending row. With `product` in the route this is
-   mandatory: `plan check` rejects a stale accepted product row outright
-   (`state=stale-product re-anchor-required`).
+2. Re-run the affected facets, starting from the earliest one the change
+   touches, and let each re-record itself at the new fingerprint. A facet whose
+   reasoning genuinely did not change is still re-recorded, never restamped by
+   hand.
+3. Decisions still `pending` come along for free — their fingerprint cell is
+   `—`, so accepting them now lands on the new value.
 
-Re-anchoring is expensive by design. The cheap path is step 3 of the workflow:
-settle the shared sections before the first facet is dispatched.
+Only step 3 can trap you. An **already accepted** decision cannot be moved: the
+writer permits pending → accepted and nothing else, so re-accepting the same OD
+ID at a new fingerprint fails with `decision=<id> status=id-collision`. Carry
+that answer forward under a fresh OD ID, starting from a pending row. With
+`product` in the route this is not optional — `plan check` rejects a stale
+accepted product row outright (`state=stale-product re-anchor-required`).
+
+Both traps have the same cheap avoidance, and it is worth the discipline:
+settle the shared sections before the first dispatch, and when an Owner decision
+changes one of them, edit first and accept second.
 
 ## Owner questions
 

@@ -63,8 +63,11 @@ read-only `xdh plan fingerprint <item>`.
 The two deferred values are Owner-sanctioned, never a shortcut past work the
 facet could have done: `plan check` accepts a deferral only when an Owner
 Decision for this facet is accepted at the same fingerprint, and otherwise
-rejects it as `facet=devex status=deferred-unaccepted`. A status carrying a
-fingerprint must carry the current one; anything older is reported as stale.
+rejects it as `facet=devex status=deferred-unaccepted` — and that row must carry
+this facet's name, not another's. `deferred-missing` means this specialist could
+not run on the host at all; a capability missing *inside* it downgrades the
+method, never the status. A status carrying a fingerprint must carry the current
+one; anything older is reported as stale.
 
 The devex facet records evidence for the full journey — setup → first change →
 test → debug → CI/release — each stage backed by real evidence, never an

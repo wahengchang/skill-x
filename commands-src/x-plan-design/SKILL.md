@@ -81,8 +81,11 @@ read-only `xdh plan fingerprint <item>`.
 The two deferred values are Owner-sanctioned, never a shortcut past work the
 facet could have done: `plan check` accepts a deferral only when an Owner
 Decision for this facet is accepted at the same fingerprint, and otherwise
-rejects it as `facet=design status=deferred-unaccepted`. A status carrying a
-fingerprint must carry the current one; anything older is reported as stale.
+rejects it as `facet=design status=deferred-unaccepted` — and that row must carry
+this facet's name, not another's. `deferred-missing` means this specialist could
+not run on the host at all; a capability missing *inside* it downgrades the
+method, never the status. A status carrying a fingerprint must carry the current
+one; anything older is reported as stale.
 
 The design facet detects Image Generate, Image Display, and Image Compare
 independently and records each as `available` or `unavailable`. A missing

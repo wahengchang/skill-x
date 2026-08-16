@@ -63,8 +63,11 @@ read-only `xdh plan fingerprint <item>`.
 The two deferred values are Owner-sanctioned, never a shortcut past work the
 facet could have done: `plan check` accepts a deferral only when an Owner
 Decision for this facet is accepted at the same fingerprint, and otherwise
-rejects it as `facet=product status=deferred-unaccepted`. A status carrying a
-fingerprint must carry the current one; anything older is reported as stale.
+rejects it as `facet=product status=deferred-unaccepted` — and that row must carry
+this facet's name, not another's. `deferred-missing` means this specialist could
+not run on the host at all; a capability missing *inside* it downgrades the
+method, never the status. A status carrying a fingerprint must carry the current
+one; anything older is reported as stale.
 
 Product records every scope expansion, reduction, or redefinition as a pending
 Owner Decision and stops — it never silently adopts a recommended answer, and
@@ -84,6 +87,12 @@ Fields, section, and row are replaced together, so the blocked status and the
 question it is blocked on can never disagree. The writer rejects the file for any
 other facet, for any status but `blocked`, and for a row whose ID already exists
 with different content.
+
+Name in the question the exact canonical input the accepted answer would change
+— `## Problem / Goal`, `## Scope`, `## Current → Desired Behavior`, the route, or
+the selected work. That is what lets the orchestrator apply the edit first and
+accept the decision at the resulting fingerprint, instead of stranding an
+accepted row on a fingerprint that no longer exists.
 
 After the Owner answers, the orchestrator accepts that same decision ID with
 `xdh plan decision set` at the current fingerprint before Product completes.
