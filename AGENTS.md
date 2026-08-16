@@ -9,7 +9,20 @@
 - After changing a skill or `_shared/update-check-header.md`, run `bin/build.sh`
   so `git status` stays clean of generated directories and so downstream
   `bin/sync-skills.sh` / `bin/cloud-bootstrap.sh` have something to install.
-- Run `make test` before finishing.
+- Run the tests before finishing. Which suite depends on what you touched:
+  - **`make test`** (fast, the routine path) is enough for low-risk changes
+    that only touch skill content: `commands-src/**/SKILL.md`, skill support
+    files, `_shared/update-check-header.md`, or documentation. It covers the
+    canonical build, artifact/shim generation, and essential smoke coverage.
+  - **`make test-full`** is mandatory for everything else — any change under
+    `bin/` (including `bin/targets/`), `tests/`, `install.sh`, `Makefile`, or
+    anything affecting lifecycle (`init`/`install`/`sync`/`update`/`uninstall`),
+    Git update checks, cloud bootstrap, target adapters, or `xdh` behavior. It
+    runs all 61 integration and regression tests.
+  - When in doubt, run `make test-full`; it is the release-quality gate.
+  - Both suites print per-test elapsed time and a slowest-cases summary, and
+    terminate any single test that exceeds `SKILL_X_TEST_TIMEOUT` (default
+    240s) as a failure instead of hanging.
 - Follow the workflows, naming rules, and design decisions documented in
   `CONTRIBUTING.md` and `ARCHITECTURE.md`.
 - Keep changes focused and avoid unrelated behavior changes.
