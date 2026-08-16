@@ -1,0 +1,30 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fast:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test prerequisites
+        run: sudo apt-get update && sudo apt-get install -y gh jq ripgrep shellcheck
+      - name: Run fast test suite
+        run: make test
+
+  full:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test prerequisites
+        run: sudo apt-get update && sudo apt-get install -y gh jq ripgrep shellcheck
+      - name: Run full test suite
+        run: make test-full
