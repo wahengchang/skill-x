@@ -812,14 +812,25 @@ EOF
 test_xdh_pr_lookup_distinguishes_forks() {
   local project="$TEST_ROOT/xdh-pr" repo="$TEST_ROOT/xdh-pr-repo"
   local bin="$TEST_ROOT/xdh-pr-bin"
+  local no_gh_bin="$TEST_ROOT/xdh-pr-no-gh-bin"
   make_xdh_fixture "$project" "$repo"
   local xdh="$project/commands/x-ship/scripts/xdh"
   git -C "$repo" checkout -q -b fix
   git -C "$repo" remote add origin 'git@github.com:contributor/skill-x.git'
 
   # Without a provider the answer is "no provider", never an invented PR.
+  # Do not assume gh lives outside /usr/bin: GitHub Actions installs it there.
+  # Give xdh only the executables this path needs, in a private directory that
+  # deliberately contains no gh binary.
+  mkdir -p "$no_gh_bin"
+  local tool
+  for tool in git dirname readlink; do
+    ln -s "$(command -v "$tool")" "$no_gh_bin/$tool"
+  done
+  local bash_bin
+  bash_bin=$(command -v bash)
   rg -q '^X_PR_STATE=no-provider$' \
-    <<<"$(cd "$repo" && PATH=/usr/bin:/bin "$xdh" pr status)"
+    <<<"$(cd "$repo" && PATH="$no_gh_bin" "$bash_bin" "$xdh" pr status)"
 
   # Two forks have an open PR from a branch called `fix`. Matching on the
   # branch name alone would pick whichever came first and overwrite it.
