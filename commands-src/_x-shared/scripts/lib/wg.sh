@@ -121,7 +121,7 @@ x_wg_new() {
   # visible to the next scan all happen under the same lock. Splitting them
   # lets two agents planning at the same moment both observe an empty
   # work-groups/ and both claim WG-001.
-  local id file existing found=no lower branch worktree
+  local id="" file existing found=no lower branch worktree
   x_lock "$scope_dir/.xdh-id.lock"
   for existing in "$target_dir/WG-"*"-$slug.md"; do
     if [[ -f $existing ]]; then
