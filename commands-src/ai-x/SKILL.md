@@ -52,7 +52,7 @@ Reviewer 不實作原始任務，也不修改被審查的產品檔案；review �
 
 ## 6. Invocation 與權限
 
-在相關 project/work directory 執行 Reviewer。優先 non-interactive、structured/machine-readable output、最低必要權限；review-only 任務優先 read-only。
+在相關 project/work directory 執行 Reviewer。優先 non-interactive、structured/machine-readable output、最低必要權限。
 
 **Reviewer 一律 read-only**：可使用非破壞性驗證（讀 source、repository search、static inspection、既有 tests、typecheck、lint、dry-run、read-only commands、隔離的暫時驗證），但不得進行 destructive operation、deployment、publishing、irreversible migration，也不得修改任何 tracked product files。
 
@@ -69,7 +69,9 @@ Reviewer 第一輪先獨立審查，再給 verdict，並在非 `ACCEPT` 時附 f
 | `BLOCKED` | 技術/事實阻塞：需求矛盾、缺必要資訊、ownership 未定、interface 未定、compatibility 衝突、不可安全實作、關鍵事實無法驗證。 |
 | `USER_DECISION_REQUIRED` | 必須由使用者做產品/UX/成本/風險/商業取捨。 |
 
-`ACCEPT` 是 Reviewer 提出的共識候選：Primary 完成第 11 節的最終自查後，即成為 `CONSENSUS_ACCEPTED`。
+`ACCEPT` 是 Reviewer 提出的共識候選：Primary 完成第 11 節 A 的最終自查後，即成為 `CONSENSUS_ACCEPTED`。
+
+第一輪 verdict 的後續路由：`ACCEPT` → 第 11 節 A；`NEEDS_REVISION` → 第 9 節 adjudication；`BLOCKED` / `USER_DECISION_REQUIRED` → 在 Primary 確認後直接到第 11 節 C / B。
 
 ## 8. Finding Schema
 
@@ -94,26 +96,31 @@ Review 重點（依任務調整）：correctness、contradictions、ownership、
 
 Primary 逐項獨立判斷，標 `AGREE` / `PARTIAL` / `DISAGREE`。Reviewer 的結論本身不是 source of truth；重要 factual claim Primary 一律自行驗證。
 
-- `AGREE`：finding 成立。說明 resolution 類型並據實回覆：
+- `AGREE`：finding 成立，確實需要處置。說明 resolution 類型並據實回覆：
   - `change_applied`：採取何種修改、如何滿足 requirement。
   - `requires_user`：此 finding 需使用者決策（見第 11 節 B）。
   - `blocked_external`：外部阻塞，無可安全合法的內容修改。
-  - `no_change_needed`：經驗證確認無需修改。
 - `PARTIAL`：指出同意/不同意部分、原建議問題、採用的精確替代方案。
-- `DISAGREE`：必須附可驗證證據（source、documentation、tests、behavior、data、contract、compatibility rule），不得只表態。
+- `DISAGREE`：finding 不成立，或經查證現狀已滿足其要求（無需修改）。必須附可驗證證據（source、documentation、tests、behavior、data、contract、compatibility rule），不得只表態。
 
 Primary 同時檢查 Reviewer 建議是否引入 circular dependency、non-atomic behavior、undefined ownership、compatibility break、new failure mode、incomplete interface、untestable requirement、scope creep。
 
 ## 10. Consensus Loop
 
-第一輪後仍存在未解決 finding 才進入此迴圈。後續輪次只處理未解決問題，不重做完整首輪 review，除非新 evidence 使原 assumptions 失效。
+「未解決 finding」定義：任何尚未被 Reviewer 標為 `FIX_VERIFIED` 或 `FINDING_WITHDRAWN` 的 finding 都是未解決。Primary 的 `AGREE/PARTIAL/DISAGREE` 只代表 Primary 立場，不能自行關閉 finding——第一輪非 `ACCEPT` verdict 的每個 finding 都須進入迴圈由 Reviewer 確認。
 
-提供同一 Reviewer：原始 task/target、原 finding、Primary 的 `AGREE/PARTIAL/DISAGREE`、新 evidence、Primary 的修改方案。Reviewer 不得禮貌附和，逐項標：
+後續輪次只處理未解決問題，不重做完整首輪 review，除非新 evidence 使原 assumptions 失效。提供同一 Reviewer：原始 task/target、原 finding、Primary 的 `AGREE/PARTIAL/DISAGREE`、新 evidence、Primary 的修改方案。Reviewer 不得禮貌附和，逐項標：
 
-- `FIX_VERIFIED`：Primary 修改已驗證，finding 關閉。
-- `FINDING_UPHELD`：維持原 finding，Primary 回應不足。
-- `FINDING_REVISED`：接受部分、調整 finding。
-- `FINDING_WITHDRAWN`：認同 Primary 反駁，撤回 finding。
+- `FIX_VERIFIED`：Primary 修改已驗證，finding CLOSED。
+- `FINDING_WITHDRAWN`：認同 Primary 反駁，撤回，finding CLOSED。
+- `FINDING_REVISED`：接受部分、調整 finding；以修訂後的 finding 重新進入 adjudication（仍 OPEN）。
+- `FINDING_UPHELD`：維持原 finding，Primary 回應不足（仍 OPEN）。
+
+**迴圈退出**：
+
+- 所有 finding CLOSED 且滿足第 11 節 A 條件 → `CONSENSUS_ACCEPTED`。
+- 某一 `BLOCKER`/`HIGH` finding 在交換證據後仍被 `FINDING_UPHELD`，且雙方都無法提出決定性驗證時，依性質 escalation：主觀取捨 → `USER_DECISION_REQUIRED`（第 11 節 B）；技術事實無法驗證 → `BLOCKED`（`evidence_unavailable`，第 11 節 C）。
+- 不得在仍有 OPEN 的 `BLOCKER`/`HIGH` finding 時宣告 `CONSENSUS_ACCEPTED`。
 
 新 finding 必須真的由新 evidence 或修改方案產生、使用新 ID、符合第 8 節完整 schema，不得重述舊 finding。事實爭議優先以 source / tests / documentation / contract / 非破壞性驗證解決。不製造假共識，也不無限討論無法技術證明的純主觀差異。
 
