@@ -710,9 +710,9 @@ Selected agents: ${agents:-none}
 Resolved OpenCode edition: $mode (override with SKILL_X_OPENCODE_VERSION=v1|v2)
 
 Manual smoke test (one per agent, after restarting it):
-1. Claude Code: run /example-skill and confirm the skill body is loaded.
-2. Codex: run \$example-skill, then /skills, and confirm the skill is listed.
-3. OpenCode: run /example-skill. On v1 the shim must load the canonical skill
+1. Claude Code: run /x-discovery and confirm the skill body is loaded.
+2. Codex: run \$x-discovery, then /skills, and confirm the skill is listed.
+3. OpenCode: run /x-discovery. On v1 the shim must load the canonical skill
    through the skill tool; on v2 the entry must appear exactly once.
 EOF
 }

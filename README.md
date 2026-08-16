@@ -43,7 +43,7 @@ cd ~/skill-x
 bin/skill-x init --agents claude,codex
 ```
 
-接著重新啟動各 agent（技能與 command 在啟動時載入），輸入 `/example-skill` 或 `$example-skill` 驗證。
+接著重新啟動各 agent（技能與 command 在啟動時載入），輸入 `/x-discovery` 或 `$x-discovery` 驗證。
 
 想確認安裝狀態：
 
@@ -215,14 +215,6 @@ bin/doctor.sh                       # 確認技能已同步
 
 方法論參考 Garry Tan 的 [`gstack`](https://github.com/garrytan/gstack)（snapshot `d078622`，MIT），只借用流程與紀律，不使用其 global state、telemetry 或 reviewer auto-fix 行為；詳見各技能的 Provenance 段落。
 
-## 範例技能
-
-`funny-text-rewriter` 是一個適合新手參考的簡單技能：提供任意文字並要求改寫得有趣，它會保留原意與重要細節，只調整表達風格。例如：
-
-```text
-請使用 funny-text-rewriter 改寫：The meeting starts at 9 AM. Please don't be late.
-```
-
 ## 容器 / 雲端 image
 
 在 image build 階段執行：
@@ -252,9 +244,9 @@ make test-full   # 完整組：上面全部 + 生命週期、更新、cloud boot
 
 1. 執行 `./install.sh` 與 `bin/skill-x doctor`，確認選定的技能路徑與 OpenCode command 區段皆為 `OK`。
 2. 重新啟動三個工具（skills 與 commands 在啟動時載入）。
-3. Claude Code：輸入 `/example-skill`，確認技能內容被載入。
-4. Codex：輸入 `$example-skill`，再開 `/skills` 確認技能出現在清單。
-5. OpenCode：輸入 `/example-skill`。v1 應看到它透過 `skill` 工具載入 canonical skill；v2 應只出現一個項目，沒有重複。
-6. 帶參數再試一次（例如 `/funny-text-rewriter 明天九點開會`），確認 `$ARGUMENTS` 有被轉送。
+3. Claude Code：輸入 `/x-discovery`，確認技能內容被載入。
+4. Codex：輸入 `$x-discovery`，再開 `/skills` 確認技能出現在清單。
+5. OpenCode：輸入 `/x-discovery`。v1 應看到它透過 `skill` 工具載入 canonical skill；v2 應只出現一個項目，沒有重複。
+6. 帶參數再試一次（例如 `/x-discovery 規劃下一個功能`），確認 `$ARGUMENTS` 有被轉送。
 
 測試腳本另外需要 [`ripgrep`](https://github.com/BurntSushi/ripgrep)（`rg` 指令）來比對輸出，執行測試前請確認已安裝（例如 `brew install ripgrep` 或 `apt install ripgrep`）。
