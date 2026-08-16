@@ -20,6 +20,8 @@ The product facet reads:
 It never reads the Design, DevEx, or Engineering facet sections, and never
 touches their fields.
 
+`<item>` is the item's file path under `.dev-hub/`, not a bare item ID.
+
 External developer-facing API / CLI / SDK semantics are Product concerns.
 Internal contributor setup, build, test, debug, CI/release, and maintainer
 workflow belong to DevEx.
@@ -54,17 +56,25 @@ input would change if the Owner accepts (`Planning route`, `Selected work`,
 ## Canonical input handoff
 
 Facet mode never rewrites fingerprinted canonical inputs itself. When the Owner
-accepts a Product decision that changes one of those inputs, control returns to
-`x-plan`:
+accepts a **pending** Product decision that changes one of those inputs, control
+returns to `x-plan`:
 
-1. `x-plan` applies the accepted canonical edit;
+1. `x-plan` applies the accepted canonical edit while the OD row is still
+   pending;
 2. `x-plan` recomputes the planning fingerprint;
-3. `x-plan` accepts the same Owner Decision ID at that new fingerprint using
-   `xdh plan decision set`;
+3. `x-plan` accepts that same pending Owner Decision ID at the new fingerprint
+   using `xdh plan decision set`;
 4. Product is re-dispatched and may complete only against the new fingerprint.
 
-This ordering prevents an accepted scope or behavior change from remaining
-anchored to an obsolete fingerprint.
+This is a valid pending → accepted transition and prevents the decision from
+being anchored to the old content.
+
+If a Product decision is already `accepted@<old-fp>` and some later unrelated
+canonical edit rotates the fingerprint, the current machine writer cannot move
+that accepted row to a new fingerprint. A second OD ID does not erase the stale
+accepted Product row, so the specialist must not present that as a re-anchor
+solution. `x-plan` must surface the machine-layer blocker instead of rewriting
+the decision table generically.
 
 ## Permitted fields and section
 
@@ -93,6 +103,11 @@ xdh plan facet set <item> --facet product --status completed@<fp> --evidence <re
 `<fp>` is the current planning fingerprint reported by the read-only
 `xdh plan fingerprint <item>`.
 
+`deferred-owner@<fp>` and `deferred-missing@<fp>` are Owner-sanctioned
+exceptions, not alternative completion shortcuts. `plan check` accepts either
+only when a Product Owner Decision is accepted at that same fingerprint;
+otherwise it reports `facet=product status=deferred-unaccepted`.
+
 ## Blocker behavior
 
 The product facet blocks (records `blocked`) only when an Owner decision is
@@ -101,13 +116,26 @@ redefinition is exactly such a case: the specialist records it as a pending
 Owner Decision and stops — it never silently adopts a recommended answer, and
 never expands, reduces, or redefines scope on its own authority.
 
-For a scope change, it writes one project-local file containing a complete
-pending product row (`| OD-001 | product | question | recommendation | pending | — |`)
-and invokes the scoped writer with `--owner-decision-file <f>`. The Product
-fields, Product section, and decision row are replaced together.
+For a Product Owner Decision, write one project-local file containing a complete
+single pending row:
 
-After the Owner answers, `x-plan` — not Product — performs any required canonical
-input edit and records the accepted transition with the same ID:
+```text
+| OD-001 | product | <question> | <recommendation> | pending | — |
+```
+
+Then invoke the scoped writer atomically:
+
+```bash
+xdh plan facet set <item> --facet product --status blocked --evidence <ref> \
+  --section-file <f> --owner-decision-file <decision-row-file>
+```
+
+The Product fields, Product section, and pending row are replaced together. The
+writer rejects the decision-file path for another facet, a non-blocked status,
+or a conflicting existing ID.
+
+After the Owner answers, `x-plan` — not Product — performs any required
+canonical edit and records the pending → accepted transition:
 
 ```bash
 xdh plan decision set <item> --id OD-001 --facet product \
