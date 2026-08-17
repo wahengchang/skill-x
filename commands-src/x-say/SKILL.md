@@ -178,7 +178,7 @@ C ◀── D
 
 ## Mermaid（可選）
 
-流程、序列、狀態、mindmap 太複雜、純文字難以表達時，用 Mermaid（終端會渲染成 ASCII）。簡單關係仍優先純文字：
+流程、序列、狀態、mindmap 太複雜、純文字難以表達時，**只在輸出環境確定支援 Mermaid 渲染時**才用 Mermaid。純終端或未支援 Mermaid 的客戶端會原樣顯示 Mermaid 原始碼，而不是圖——本 repo 的 build/target adapter 也只分發 Markdown、不做 Mermaid→ASCII 轉換，此時 Mermaid 反而最難讀。無法確認渲染器支援時，改用純文字或把圖拆成較小的純文字區塊：
 
 ```mermaid
 graph LR
