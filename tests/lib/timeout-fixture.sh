@@ -15,7 +15,10 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 source "$PROJECT_ROOT/tests/lib/harness.sh"
 
 stalled_test() {
-  sleep 600
+  # Keep the output pipe open from a grandchild too. A timeout implementation
+  # that kills only the test shell (or only its direct child) will still hang
+  # when this fixture is captured with command substitution by tests/run.sh.
+  bash -c 'sleep 600 & wait'
 }
 
 run_test --fast 'stalled test is terminated' stalled_test
