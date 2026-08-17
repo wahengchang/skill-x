@@ -160,6 +160,31 @@ copy_built_project() {
 # Test execution
 # ---------------------------------------------------------------------------
 
+# Print every current descendant of a process from one portable ps snapshot.
+# The watchdog records these PIDs before signalling the test shell: once that
+# shell exits, its children may be reparented and can no longer be discovered
+# from the original root PID.
+_skill_x_test_descendant_pids() {
+  local root_pid=$1
+  ps -eo pid=,ppid= 2>/dev/null | awk -v root_pid="$root_pid" '
+    { parent[$1] = $2 }
+    END {
+      for (pid in parent) {
+        current = pid
+        hops = 0
+        while ((current in parent) && hops++ < 1000) {
+          if (parent[current] == root_pid) {
+            print pid
+            break
+          }
+          if (parent[current] == current) break
+          current = parent[current]
+        }
+      }
+    }
+  '
+}
+
 # run_test [--fast] <name> <command...>
 #
 # --fast marks the test as part of the routine subset; without it the test only
@@ -190,8 +215,8 @@ run_test() {
   ( set -euo pipefail; "$@" ) &
   local pid=$!
 
-  # Watchdog: bounded wait, then terminate the test (and any direct children it
-  # left behind) so a stalled case fails loudly instead of hanging the suite.
+  # Watchdog: bounded wait, then terminate the test and all descendants it left
+  # behind so a stalled case fails loudly instead of hanging the suite.
   # It retires by polling rather than by being signalled: a TERM would sit
   # unhandled until its own `sleep` returned — the very stall this is meant to
   # bound — and killing it would print job-control noise into the suite output.
@@ -206,17 +231,22 @@ run_test() {
     done
     [[ -e $finished ]] && exit 0
     : > "$marker" 2>/dev/null || true
-    if command -v pkill >/dev/null 2>&1; then
-      pkill -TERM -P "$pid" 2>/dev/null || true
-    fi
-    kill -TERM "$pid" 2>/dev/null || true
+    targets=("$pid")
+    while IFS= read -r descendant; do
+      [[ -n $descendant ]] && targets+=("$descendant")
+    done < <(_skill_x_test_descendant_pids "$pid")
+    kill -TERM "${targets[@]}" 2>/dev/null || true
     # Grace period before SIGKILL, given up as soon as the test is actually gone
     # so the watchdog never holds the suite's output open longer than needed.
     for _ in 1 2; do
-      kill -0 "$pid" 2>/dev/null || exit 0
+      any_alive=0
+      for target in "${targets[@]}"; do
+        kill -0 "$target" 2>/dev/null && any_alive=1
+      done
+      (( any_alive )) || exit 0
       sleep 1
     done
-    kill -KILL "$pid" 2>/dev/null || true
+    kill -KILL "${targets[@]}" 2>/dev/null || true
   ) &
 
   { wait "$pid"; } 2>/dev/null || status=$?
