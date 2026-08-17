@@ -26,6 +26,10 @@ done
 
 The facet contract this skill follows is bundled at `references/facet-contract.md`.
 
+`<item>` is always the item's **file path** under `.dev-hub/`, never the bare
+`IS-001`. In facet mode the orchestrator hands it over together with the current
+fingerprint; do not re-derive either from the conversation.
+
 ## Direct mode
 
 Direct mode requires an explicit plan target: the user names an existing `IS` /
@@ -56,9 +60,24 @@ completed@<fp> | deferred-owner@<fp> | deferred-missing@<fp>`. Completion
 records `completed@<current fingerprint>`; the fingerprint is reported by the
 read-only `xdh plan fingerprint <item>`.
 
+The two deferred values are Owner-sanctioned, never a shortcut past work the
+facet could have done: `plan check` accepts a deferral only when an Owner
+Decision for this facet is accepted at the same fingerprint, and otherwise
+rejects it as `facet=devex status=deferred-unaccepted` — and that row must carry
+this facet's name, not another's. `deferred-missing` means this specialist could
+not run on the host at all; a capability missing *inside* it downgrades the
+method, never the status. A status carrying a fingerprint must carry the current
+one; anything older is reported as stale.
+
 The devex facet records evidence for the full journey — setup → first change →
 test → debug → CI/release — each stage backed by real evidence, never an
 assumption.
+
+A stage that cannot be verified is written into `## DevEx Facet` as an
+unverified gap. If it needs an Owner call, the facet reports the question with a
+`blocked` status and a recommended answer, and the orchestrator opens the
+decision row; DevEx cannot open one itself — the row writer accepts an atomic
+facet-and-row write only for `product`.
 
 This facet must never create an item (`item new`), create a Work Group
 (`wg new`), create a worktree or branch, run the generic `field set`, or run

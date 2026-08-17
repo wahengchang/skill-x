@@ -61,6 +61,7 @@ Work
   xdh id next --kind WK|IS|SP|WG|RV|DBG [--cycle C] [--dir D]
   xdh item new --type issue|spike --slug S [--title T] [--source WK-001]
                [--owner O] [--wg WG-001] [--priority P2] [--cycle C] [--dir D]
+               [--route product,design,devex,engineering] [--selected-work IDs]
   xdh wg new --slug S [--title T] [--items "IS-001"] [--owner O]
              [--base B] [--from REF] [--cycle C]
   xdh artifact new --kind RV|DBG [--target T] [--base B] [--implementer A]

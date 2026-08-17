@@ -56,6 +56,11 @@ cannot be obtained. A gap in the developer journey is recorded in
 cannot be verified or decided, it becomes a blocker or a pending Owner Decision
 rather than a guess.
 
+The devex facet does not write the decision row itself: the atomic
+facet-and-row write is reserved for `product`. It records `blocked`, states the
+question and its recommended answer in `## DevEx Facet`, and the orchestrator
+opens the pending row with the ID-keyed writer.
+
 ## Forbidden lifecycle mutations
 
 This facet must never create an item (`item new`), create a Work Group

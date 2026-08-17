@@ -189,7 +189,8 @@ tests/lib/timeout-fixture.sh   驗證 harness 逾時路徑的受控 fixture
 9. **`xdh pr` 只支援 GitHub `gh`（中）**：沒有 `gh` 時回報 `X_PR_PROVIDER=none`，由技能改成輸出手動建立 PR 的指示。要支援 GitLab 等平台需再加一個 provider 分支。head owner 由 push remote URL 推得，若 remote 未設定則退回只比對 branch name，此時多筆相符會回報 `ambiguous` 而不是任選一筆。
 10. **獨立 Reviewer 由 host 決定（中）**：`x-review` 要求另一個 Agent，但能否真的啟動獨立 Agent 取決於當下工具。無法啟動時規定回報 `BLOCKED_NO_INDEPENDENT_REVIEWER`，這條是靠指示而非機制保證的。
 11. **`.dev-hub` 沿用者的既有 `.gitignore`（低）**：`xdh` 只在缺少時附加三行，不會移除使用者自己寫的規則；若使用者手動刪掉這些行，Cycle 內容可能被誤 commit。
-12. **鎖是同機器內的（低）**：`x_lock` 用 `mkdir` 互斥，只保護同一台機器上的併發 agent。若 `.dev-hub` 放在多台機器共掛的網路檔案系統上，`mkdir` 的原子性不再保證。超過兩分鐘未釋放的鎖會被視為死行程留下的而清除。
+12. **awk 不得使用 interval expression（中）**：`xdh` 的判斷邏輯大量寫在 awk 裡，而 Debian／Ubuntu 的預設 awk 是 mawk。mawk 1.3.4 (20240123) 遇到 interval 後接 alternation group（例如 `^#{1,6}([ \t]|$)`）會直接 `REcompile() - panic` 中止，於是 `x_plan_has_content` 對每一個 section 都回報 empty，`xdh plan check` 在這種機器上永遠無法通過。開發機是 macOS 時看不到這個現象，CI 也可能因為 mawk 版本不同而漏掉。新增 awk regex 一律改用 `+`／`*` 或明確列舉，不用 `{n,m}`。
+13. **鎖是同機器內的（低）**：`x_lock` 用 `mkdir` 互斥，只保護同一台機器上的併發 agent。若 `.dev-hub` 放在多台機器共掛的網路檔案系統上，`mkdir` 的原子性不再保證。超過兩分鐘未釋放的鎖會被視為死行程留下的而清除。
 
 ## 未採用方案
 
