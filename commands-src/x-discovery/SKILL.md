@@ -75,6 +75,16 @@ Read it once. It is a cache keyed on the commit and the working tree, so
 `X_SURVEY_STATE=fresh` means nothing changed since it was built and a later
 stage will reuse the same file rather than re-deriving it.
 
+`X_SURVEY_NAV` says how to answer relationship questions in this project:
+
+- **`graph`** — a CodeGraph index is ready. Get the module map and the data flow
+  from it: `codegraph callers <symbol>` and `codegraph impact <symbol>` name the
+  real edges in a few hundred bytes, where reading the files that contain a
+  symbol costs tens of kilobytes. The `## Code graph` section of the survey
+  lists the commands.
+- **`files`** — no usable index (shell/docs project, or CodeGraph absent or
+  uninitialized). Read as below. This is an ordinary state, not a problem.
+
 Then open individual files **only where a judgement actually depends on their
 contents** — the entry point whose responsibility is unclear, the schema a
 candidate would change, the test that proves current behavior. Cite what you

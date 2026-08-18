@@ -59,6 +59,14 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 
 17. **fingerprint 只對實質變動反應**：planning fingerprint 是為了偵測「規劃輸入的意義改了」。原本對原始位元組雜湊，連 tab、重複空白、多一行空行都會 rotate，把所有已完成的 facet 標成 stale——防呆變成噪音。`x_plan_normalize_body` 在雜湊前做保守正規化（tab 展開、行內連續空白、行尾空白、連續空行），但**保留前導縮排**，因為它承載清單層級，是語意。結論未受影響的 facet 用 `xdh plan facet set --reaffirm` 重新蓋章：它只能平移一個已經記錄過的同類狀態，永遠無法無中生有一個 completed。
 
+18. **關係查詢按專案分類 routing**：「誰呼叫這個 / 改了會影響誰 / 哪些測試會壞」由 CodeGraph 的索引回答，比讀檔案便宜一到兩個數量級——在 `wf-comic` 與 `owlchi-site-system` 上實測，一次 callers 查詢的純文字答案是 0.2–1.3 KB，而含有該符號的檔案總量是 26–243 KB。但 CodeGraph 不支援 shell / Markdown / YAML，skill-x 自己就索引不到東西，所以能力必須是**可選**的：`xdh survey` 一次分類（語言佔比 → 是否已 init → 索引是否非空），輸出 `X_SURVEY_NAV`，技能只讀這個結果。`unsupported` / `empty` / `absent` 都是正常狀態，靜默降級回讀檔路線，不得產生警告噪音。
+
+    三個實測發現寫進了技能文字，因為官方文件沒有講：(a) `--json` 的輸出約是純文字的兩倍而事實相同，agent 該用純文字；(b) `codegraph affected` 的預設 glob 只認 `*.test.*` / `*.spec.*`，Python 的 `test_*.py` 會回「No test files affected」——與真正的空結果無法區分，所以 survey 從專案的測試命名推導出 glob 並寫進 `## Code graph`，而且 `affected` 只能當**正面訊號**（它走 import 邊，Playwright 那種跑瀏覽器的套件連不到）；(c) CLI 預設開啟 telemetry，跑在私有 repo 上一律 `CODEGRAPH_TELEMETRY=0`。
+
+19. **索引新鮮度搭 survey 的便車，且永不阻擋**：`survey ensure` 只在**自己要重建時**才跑 `codegraph sync -q`——survey 的快取鍵問的正是「程式碼變了沒」，與 sync 要回答的是同一個問題，重用它等於零額外過期邏輯、零額外成本（實測 fresh 路徑 358ms，rebuild 含 sync 858ms）。所有 codegraph 呼叫都有 120 秒硬 timeout，失敗或逾時一律降級成 `files`：**過期的圖會給出有自信但錯誤的答案，比沒有圖更糟**。`codegraph index`（全量重建）永遠不自動執行——小專案 1.8 秒，但大 repo 是分鐘級，在規劃流程中途卡住比原本的問題更糟；survey 只回報 `uninitialized` 讓使用者自己決定。
+
+    `## Code graph` 區塊刻意很薄：索引狀態、測試 glob、指令選單。早期版本還會探測 fan-in 最高的符號，那需要 40 次連續 `codegraph callers` 行程、在 353 檔的專案上要 11 秒——對一個每次重建都跑的東西太貴，而且形狀也不對：fan-in 是該對「這次真正動到的符號」問的問題。
+
 ## 核心機制
 
 ### Build
@@ -96,7 +104,7 @@ adapter 的 action contract 固定為：`build <canonical-staging-dir> <artifact
 | 子指令 | 責任 |
 | --- | --- |
 | `paths` / `init` | 以 `git rev-parse --git-common-dir` 從任一 linked worktree 解析回 main repo，建立 `.dev-hub` 骨架與 `.gitignore` |
-| `survey ensure/path` | 產出並快取專案概況（layout、entry point、文件、測試、DevEx 指令、變更熱點），8 KB 上限；以 commit + working tree + schema 版號為 key，變了才重收 |
+| `survey ensure/path` | 產出並快取專案概況（layout、entry point、文件、測試、DevEx 指令、變更熱點），8 KB 上限；以 commit + working tree + schema 版號為 key，變了才重收。同時分類專案並輸出 `X_SURVEY_NAV=graph\|files` 決定關係查詢走哪條路 |
 | `cycle new/list/show/check/close` | 建立或沿用 Cycle、關閉前檢查 gate、把完成 Cycle 壓成 `logs/` 短紀錄 |
 | `id next`、`item new`、`wg new`、`artifact new` | 在 `mkdir` 互斥鎖內完成「檢查既有 → 配號 → 建檔」，避免兩個 agent 拿到同一個編號 |
 | `plan init / facet set / decision set / fingerprint / check / ready` | 初始化規劃路由、以 scoped writer 記錄 facet 與 Owner Decision 狀態、計算 planning fingerprint、檢查並放行 new-format 工作項到 `ready` |

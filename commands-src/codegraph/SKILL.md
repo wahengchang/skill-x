@@ -28,6 +28,28 @@ codegraph init        # initialize and build the first index
 
 The index lives in `.codegraph/` (add it to `.gitignore`).
 
+## Cost discipline
+
+The commands are not equally cheap, and the difference is the whole reason to
+use this instead of grep.
+
+**Ask for relationships first.** `callers`, `callees`, `impact`, `query`,
+`files` and `affected` return names, kinds and `file:line` — a few hundred bytes
+that say who calls what. Measured on two real projects, the answer to a callers
+question came back in 0.2–1.3 KB against 26–243 KB for the files that contain
+the symbol. That gap is the point: the graph tells you which few files are worth
+opening.
+
+**Use the plain output, not `--json`.** The JSON envelope runs about twice the
+bytes for the same facts, and the plain form is already structured.
+
+**`explore` is different in kind.** It returns a compact blast-radius header
+*followed by verbatim source* — roughly 11 KB for one query in the measured
+case. That is not waste when you were going to read those files anyway (it says
+so itself: treat each block as a Read already performed), but it is the wrong
+default. Reach for it, or for `node <symbol>`, only once you know which symbol's
+body you actually need.
+
 ## Core workflow (before risky edits)
 
 1. Confirm the index is fresh: `codegraph status`
@@ -58,6 +80,22 @@ If the index is stale or new files were added, rebuild it: `codegraph index`.
 
 `--path <dir>` selects the project; the default is the current directory.
 
+## Traps
+
+These cost correctness, not just tokens.
+
+- **`affected` fails silently.** Its default glob matches `*.test.*` /
+  `*.spec.*` only, so a Python suite named `test_*.py` returns "No test files
+  affected" — indistinguishable from a genuine empty answer. Always pass
+  `-f "<glob>"` matching the project's own convention. And even then it follows
+  *import* edges: Playwright-style suites that drive a browser link to nothing,
+  so an empty result is never evidence that no test covers the change.
+- **Telemetry is on by default.** The CLI reports that it "collects anonymous
+  usage stats" on first use. Set `CODEGRAPH_TELEMETRY=0` (or run
+  `codegraph telemetry off`) before pointing it at a private repository.
+- **`.codegraph/` lands in the project.** It is roughly 6–11 MB and must be
+  added to that project's `.gitignore`; `init` does not do it for you.
+
 ## Notes
 
 - `index` requires a prior `init`; use `sync` for cheap incremental updates.
@@ -67,3 +105,7 @@ If the index is stale or new files were added, rebuild it: `codegraph index`.
   C/C++, C#, Ruby, PHP, Swift, Kotlin, Scala, Dart, Lua, Solidity, Terraform,
   Nix, and more — but no shell, Markdown, or YAML. Shell-heavy projects index
   almost nothing.
+- Indexing is fast enough not to plan around: a 353-file TypeScript project
+  indexed in ~1.8s, and `sync` after a one-file edit took ~0.5s. Large
+  repositories are the exception — budget minutes, not seconds, for a first
+  `init` on tens of thousands of files.

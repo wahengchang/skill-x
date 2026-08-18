@@ -190,6 +190,221 @@ test_survey_is_written_under_gitignored_runtime() {
 }
 
 # ---------------------------------------------------------------------------
+# Code graph routing.
+#
+# Driven by a stub `codegraph` on PATH rather than the real CLI: CI must not
+# install an npm package to run the suite, and a stub is the only way to assert
+# what the survey *does not* call (no sync on a fresh survey) or to force a
+# failing sync deterministically.
+# ---------------------------------------------------------------------------
+
+# Write a fake codegraph that logs every invocation and answers `status` with
+# the node count it was built with. `nodes=fail-sync` makes `sync` exit non-zero.
+make_codegraph_stub() {
+  local bindir=$1 nodes=$2
+  mkdir -p "$bindir"
+  cat > "$bindir/codegraph" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\$CODEGRAPH_STUB_LOG"
+case \${1:-} in
+  sync)
+    [[ "$nodes" == fail-sync ]] && exit 1
+    exit 0
+    ;;
+  status)
+    printf '\nIndex Statistics:\n  Files:     10\n  Nodes:     %s\n  Edges:     40\n' "$nodes"
+    ;;
+esac
+exit 0
+EOF
+  chmod +x "$bindir/codegraph"
+}
+
+# A repo whose language mix crosses the supported-share threshold.
+make_graph_repo() {
+  local repo=$1
+  mkdir -p "$repo/src"
+  git init -q -b main "$repo"
+  git -C "$repo" config user.email test@example.invalid
+  git -C "$repo" config user.name 'Test Runner'
+  local i
+  for i in 1 2 3 4 5 6 7 8; do printf 'export const v%s = %s\n' "$i" "$i" > "$repo/src/m$i.ts"; done
+  printf '# Demo\n' > "$repo/README.md"
+  git -C "$repo" add -A
+  git -C "$repo" commit -qm initial
+}
+
+run_graph_survey() {
+  local repo=$1 xdh=$2 bindir=$3 out=$4
+  ( cd "$repo" && PATH="$bindir:$PATH" CODEGRAPH_STUB_LOG="$bindir/stub.log" "$xdh" survey ensure ) > "$out"
+}
+
+test_graph_route_is_taken_only_when_the_index_is_usable() {
+  local project="$TEST_ROOT/nav" repo="$TEST_ROOT/nav-repo" bin="$TEST_ROOT/nav-bin"
+  copy_built_project "$project"
+  make_graph_repo "$repo"
+  local XDH="$project/commands/x-discovery/scripts/xdh"
+
+  # 1. No codegraph on PATH at all.
+  ( cd "$repo" && env PATH="/usr/bin:/bin" "$XDH" survey ensure ) > "$project/absent" 2>"$project/absent.err"
+  [[ $(survey_kv "$project/absent" X_SURVEY_NAV) == files ]]
+  [[ $(survey_kv "$project/absent" X_SURVEY_GRAPH) == absent ]]
+  # A project without the tool is ordinary, not a problem: no noise on stderr.
+  [[ ! -s "$project/absent.err" ]]
+
+  # 2. Installed, but the project has no index yet.
+  make_codegraph_stub "$bin" 500
+  rm -rf "$repo/.dev-hub"
+  run_graph_survey "$repo" "$XDH" "$bin" "$project/uninit"
+  [[ $(survey_kv "$project/uninit" X_SURVEY_GRAPH) == uninitialized ]]
+  [[ $(survey_kv "$project/uninit" X_SURVEY_NAV) == files ]]
+
+  # 3. Initialized but the index found nothing — the shell-project shape.
+  mkdir -p "$repo/.codegraph"
+  make_codegraph_stub "$bin" 0
+  rm -rf "$repo/.dev-hub"
+  run_graph_survey "$repo" "$XDH" "$bin" "$project/empty"
+  [[ $(survey_kv "$project/empty" X_SURVEY_GRAPH) == empty ]]
+  [[ $(survey_kv "$project/empty" X_SURVEY_NAV) == files ]]
+
+  # 4. A real index: the graph route, and the section that carries the commands.
+  make_codegraph_stub "$bin" 1234
+  rm -rf "$repo/.dev-hub"
+  run_graph_survey "$repo" "$XDH" "$bin" "$project/ready"
+  [[ $(survey_kv "$project/ready" X_SURVEY_GRAPH) == ready ]]
+  [[ $(survey_kv "$project/ready" X_SURVEY_NAV) == graph ]]
+  [[ $(survey_kv "$project/ready" X_SURVEY_GRAPH_SYMBOLS) == 1234 ]]
+  local file
+  file=$(survey_kv "$project/ready" X_SURVEY_FILE)
+  rg -qF '## Code graph' "$file"
+  rg -qF 'codegraph impact' "$file"
+  # The advice must stay: plain output, not --json.
+  rg -qF 'not `--json`' "$file"
+  [[ $(survey_kv "$project/ready" X_SURVEY_BYTES) -le 8192 ]]
+}
+
+test_graph_route_is_refused_for_a_shell_project() {
+  # skill-x's own shape: CodeGraph indexes no shell or Markdown, so a usable
+  # binary and even an index directory must still route to files.
+  local project="$TEST_ROOT/shell" repo="$TEST_ROOT/shell-repo" bin="$TEST_ROOT/shell-bin"
+  copy_built_project "$project"
+  mkdir -p "$repo/bin"
+  git init -q -b main "$repo"
+  git -C "$repo" config user.email test@example.invalid
+  git -C "$repo" config user.name 'Test Runner'
+  local i
+  for i in 1 2 3 4 5 6; do printf '#!/bin/sh\necho %s\n' "$i" > "$repo/bin/s$i.sh"; done
+  printf '# Docs\n' > "$repo/README.md"
+  printf '# More\n' > "$repo/ARCHITECTURE.md"
+  git -C "$repo" add -A
+  git -C "$repo" commit -qm initial
+
+  mkdir -p "$repo/.codegraph"
+  make_codegraph_stub "$bin" 9999
+  local XDH="$project/commands/x-discovery/scripts/xdh"
+  run_graph_survey "$repo" "$XDH" "$bin" "$project/out"
+
+  [[ $(survey_kv "$project/out" X_SURVEY_GRAPH) == unsupported ]]
+  [[ $(survey_kv "$project/out" X_SURVEY_NAV) == files ]]
+  # Classification must short-circuit before spending anything on the tool.
+  [[ ! -s "$bin/stub.log" ]]
+  rg -qF '## Code graph' "$(survey_kv "$project/out" X_SURVEY_FILE)" && {
+    echo 'Code graph section written for an unsupported project' >&2
+    return 1
+  }
+  return 0
+}
+
+test_graph_sync_runs_only_when_the_survey_rebuilds() {
+  local project="$TEST_ROOT/sync" repo="$TEST_ROOT/sync-repo" bin="$TEST_ROOT/sync-bin"
+  copy_built_project "$project"
+  make_graph_repo "$repo"
+  mkdir -p "$repo/.codegraph"
+  make_codegraph_stub "$bin" 777
+  local XDH="$project/commands/x-discovery/scripts/xdh"
+
+  run_graph_survey "$repo" "$XDH" "$bin" "$project/first"
+  [[ $(survey_kv "$project/first" X_SURVEY_STATE) == rebuilt ]]
+  [[ $(rg -c '^sync' "$bin/stub.log" || true) -eq 1 ]]
+
+  # A fresh survey means nothing moved, so the graph cannot have gone stale:
+  # the second call must not pay for a sync.
+  run_graph_survey "$repo" "$XDH" "$bin" "$project/second"
+  [[ $(survey_kv "$project/second" X_SURVEY_STATE) == fresh ]]
+  [[ $(survey_kv "$project/second" X_SURVEY_NAV) == graph ]]
+  [[ $(rg -c '^sync' "$bin/stub.log" || true) -eq 1 ]]
+
+  # An edit moves the key, so the next call syncs again.
+  printf 'export const extra = 1\n' >> "$repo/src/m1.ts"
+  run_graph_survey "$repo" "$XDH" "$bin" "$project/third"
+  [[ $(survey_kv "$project/third" X_SURVEY_STATE) == rebuilt ]]
+  [[ $(rg -c '^sync' "$bin/stub.log" || true) -eq 2 ]]
+
+  # `survey path` reports only; it must never sync.
+  ( cd "$repo" && PATH="$bin:$PATH" CODEGRAPH_STUB_LOG="$bin/stub.log" "$XDH" survey path ) >/dev/null
+  [[ $(rg -c '^sync' "$bin/stub.log" || true) -eq 2 ]]
+}
+
+test_graph_degrades_when_sync_fails() {
+  # A graph that could not be brought up to date is worse than no graph: it
+  # answers confidently from stale edges. The survey must still be produced.
+  local project="$TEST_ROOT/stale" repo="$TEST_ROOT/stale-repo" bin="$TEST_ROOT/stale-bin"
+  copy_built_project "$project"
+  make_graph_repo "$repo"
+  mkdir -p "$repo/.codegraph"
+  make_codegraph_stub "$bin" fail-sync
+  local XDH="$project/commands/x-discovery/scripts/xdh"
+
+  run_graph_survey "$repo" "$XDH" "$bin" "$project/out"
+  [[ $(survey_kv "$project/out" X_SURVEY_GRAPH) == stale ]]
+  [[ $(survey_kv "$project/out" X_SURVEY_NAV) == files ]]
+  [[ -s $(survey_kv "$project/out" X_SURVEY_FILE) ]]
+  [[ $(survey_kv "$project/out" X_SURVEY_STATE) == rebuilt ]]
+}
+
+test_graph_reports_the_test_glob_affected_actually_needs() {
+  # `codegraph affected` defaults to *.test.* / *.spec.* only. On a Python suite
+  # named test_*.py it answers "No test files affected" — which reads exactly
+  # like a real empty result. Deriving the glob here is what prevents that.
+  local project="$TEST_ROOT/glob" bin="$TEST_ROOT/glob-bin"
+  copy_built_project "$project"
+  make_codegraph_stub "$bin" 321
+  local XDH="$project/commands/x-discovery/scripts/xdh"
+
+  local spec name pattern want repo
+  for spec in 'py:src/mod%s.py:tests/test_mod%s.py:**/test_*.py' \
+              'go:src/mod%s.go:src/mod%s_test.go:**/*_test.go' \
+              'ts:src/mod%s.ts:src/mod%s.spec.ts:**/*.{test,spec}.{ts,tsx,js,jsx}'; do
+    name=${spec%%:*}
+    repo="$TEST_ROOT/glob-$name"
+    local rest=${spec#*:} srcpat testpat
+    srcpat=${rest%%:*}; rest=${rest#*:}
+    testpat=${rest%%:*}; want=${rest#*:}
+
+    mkdir -p "$repo/src" "$repo/tests"
+    git init -q -b main "$repo"
+    git -C "$repo" config user.email test@example.invalid
+    git -C "$repo" config user.name 'Test Runner'
+    local i f
+    for i in 1 2 3 4 5 6; do
+      # shellcheck disable=SC2059
+      f=$(printf "$srcpat" "$i"); mkdir -p "$(dirname "$repo/$f")"; printf 'x\n' > "$repo/$f"
+      # shellcheck disable=SC2059
+      f=$(printf "$testpat" "$i"); mkdir -p "$(dirname "$repo/$f")"; printf 'x\n' > "$repo/$f"
+    done
+    git -C "$repo" add -A
+    git -C "$repo" commit -qm initial
+    mkdir -p "$repo/.codegraph"
+
+    run_graph_survey "$repo" "$XDH" "$bin" "$project/$name.out"
+    [[ $(survey_kv "$project/$name.out" X_SURVEY_NAV) == graph ]] ||
+      { echo "$name: expected the graph route" >&2; return 1; }
+    rg -qF "$want" "$(survey_kv "$project/$name.out" X_SURVEY_FILE)" ||
+      { echo "$name: survey did not report the glob $want" >&2; return 1; }
+  done
+}
+
+# ---------------------------------------------------------------------------
 # Token budgets.
 #
 # A skill's SKILL.md is loaded in full whenever the skill runs, so its size is a
@@ -204,13 +419,18 @@ test_deployed_skills_stay_within_budget() {
 
   local spec name limit actual
   # Kept a little above current size so ordinary wording edits do not trip it.
+  # x-plan-eng's ceiling was raised from 15000 when CodeGraph routing landed: it
+  # gained the route switch, the mechanical sources for three IS sections, and
+  # the warning about `affected` returning empty silently. Ceilings move for a
+  # stated reason, never by drift.
   for spec in \
     'x-discovery:9000' \
     'x-plan:15000' \
-    'x-plan-eng:15000' \
+    'x-plan-eng:16000' \
     'x-plan-product:5000' \
     'x-plan-design:5500' \
     'x-plan-devex:4500' \
+    'codegraph:6500' \
   ; do
     name=${spec%%:*}
     limit=${spec##*:}
@@ -264,6 +484,11 @@ run_test --fast 'survey is cached until the tree moves' test_survey_is_cached_un
 run_test 'survey path reports without building' test_survey_path_reports_without_building
 run_test 'survey survives a symlinked directory' test_survey_survives_a_symlinked_directory
 run_test 'survey stays out of Git' test_survey_is_written_under_gitignored_runtime
+run_test --fast 'graph route only when the index is usable' test_graph_route_is_taken_only_when_the_index_is_usable
+run_test --fast 'graph route refused for a shell project' test_graph_route_is_refused_for_a_shell_project
+run_test 'graph sync runs only when the survey rebuilds' test_graph_sync_runs_only_when_the_survey_rebuilds
+run_test 'graph degrades when sync fails' test_graph_degrades_when_sync_fails
+run_test 'graph reports the test glob affected needs' test_graph_reports_the_test_glob_affected_actually_needs
 run_test --fast 'deployed skills stay within budget' test_deployed_skills_stay_within_budget
 run_test --fast 'provenance is stripped from artifacts' test_provenance_is_stripped_from_deployed_skills
 run_test --fast 'orchestrator does not bundle facet contracts' test_orchestrator_does_not_bundle_the_facet_contracts

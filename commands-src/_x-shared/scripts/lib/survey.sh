@@ -14,7 +14,7 @@
 
 # Bump when the emitted sections change: the version is part of the cache key,
 # so an upgraded xdh rebuilds a survey written by an older one.
-X_SURVEY_SCHEMA=1
+X_SURVEY_SCHEMA=2
 X_SURVEY_MAX_BYTES=8192
 
 x_survey_dir() { x_resolve_paths; printf '%s' "$X_RUNTIME/survey"; }
@@ -237,6 +237,150 @@ x_survey_section_hotspots() {
   printf '\n'
 }
 
+# ---------------------------------------------------------------------------
+# Code graph routing.
+#
+# CodeGraph (@colbymchenry/codegraph) answers "who calls this / what does this
+# reach / which tests cover it" from an index instead of from reading files.
+# Measured on two real projects, its plain-text answer to a callers question is
+# 30-180x smaller than the files an agent would otherwise open to answer it.
+#
+# It only supports ~30 compiled/scripted languages — no shell, Markdown or YAML
+# — so a repository like skill-x itself indexes almost nothing. That is the
+# normal case, not an error: the survey classifies the project once and the
+# skills route on the answer.
+# ---------------------------------------------------------------------------
+
+# Extensions CodeGraph 1.5 extracts structure from. Deliberately a subset of its
+# advertised list: only what we would actually route on.
+X_SURVEY_GRAPH_EXTS='ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|cs|php|rb|c|h|cc|cpp|hpp|m|swift|kt|kts|scala|dart|vue|svelte|astro|lua|sol|tf|nix'
+
+# Share of files that must be in a supported language before the graph route is
+# worth taking. Below this the index answers too few questions to be the primary
+# navigation surface.
+X_SURVEY_GRAPH_MIN_SHARE=30
+
+# Hard bound on any codegraph call. A slow graph must never hold up planning:
+# every call site degrades to the file route instead of waiting.
+X_SURVEY_GRAPH_TIMEOUT=120
+
+# Run codegraph with telemetry off and a hard timeout. The CLI reports
+# "collects anonymous usage stats" on first use; a skill framework that runs
+# over private repositories opts out rather than deciding that for the user.
+x_survey_codegraph() {
+  local t=timeout
+  command -v timeout >/dev/null 2>&1 || t=""
+  (
+    cd -- "$X_MAIN_ROOT" || exit 1
+    CODEGRAPH_TELEMETRY=0 ${t:+$t "$X_SURVEY_GRAPH_TIMEOUT"} codegraph "$@" 2>/dev/null
+  )
+}
+
+# Percentage of in-scope files written in a supported language.
+x_survey_graph_share() {
+  x_survey_files | LC_ALL=C tr '\0' '\n' |
+    LC_ALL=C awk -v exts="$X_SURVEY_GRAPH_EXTS" '
+      BEGIN { n = split(exts, a, "|"); for (i = 1; i <= n; i++) ok[a[i]] = 1 }
+      {
+        total++
+        name = $0
+        sub(/^.*\//, "", name)
+        if (name ~ /\./) { e = name; sub(/^.*\./, "", e); if (e in ok) hit++ }
+      }
+      END { if (total == 0) print 0; else printf "%d\n", (hit * 100) / total }
+    '
+}
+
+# Classify the project and, when the graph is usable, keep it fresh.
+# Sets X_SURVEY_GRAPH, X_SURVEY_NAV and X_SURVEY_GRAPH_SYMBOLS.
+#
+# `do_sync` is passed 1 only when the survey itself is rebuilding, i.e. when the
+# commit or the working tree moved. The survey's cache key already asks exactly
+# the question `codegraph sync` answers, so reusing it means no second staleness
+# mechanism and no cost at all when nothing changed.
+x_survey_graph_probe() {
+  local do_sync=${1:-0} share symbols
+  X_SURVEY_GRAPH_SYMBOLS=0
+
+  if ! command -v codegraph >/dev/null 2>&1; then X_SURVEY_GRAPH=absent; X_SURVEY_NAV=files; return 0; fi
+
+  share=$(x_survey_graph_share || true)
+  [[ $share =~ ^[0-9]+$ ]] || share=0
+  if (( share < X_SURVEY_GRAPH_MIN_SHARE )); then
+    X_SURVEY_GRAPH=unsupported; X_SURVEY_NAV=files; return 0
+  fi
+
+  if [[ ! -d $X_MAIN_ROOT/.codegraph ]]; then
+    X_SURVEY_GRAPH=uninitialized; X_SURVEY_NAV=files; return 0
+  fi
+
+  # A full `codegraph index` is never run from here. It is seconds on a small
+  # project but minutes on a large one, and stalling a planning session for that
+  # is worse than the cost this whole mechanism exists to remove.
+  if (( do_sync )); then
+    if ! x_survey_codegraph sync -q >/dev/null; then
+      X_SURVEY_GRAPH=stale; X_SURVEY_NAV=files; return 0
+    fi
+  fi
+
+  symbols=$(x_survey_codegraph status |
+    LC_ALL=C awk '/^[ \t]*Nodes:/ { gsub(/[^0-9]/, "", $2); print $2; exit }' || true)
+  [[ $symbols =~ ^[0-9]+$ ]] || symbols=0
+  X_SURVEY_GRAPH_SYMBOLS=$symbols
+
+  if (( symbols == 0 )); then
+    X_SURVEY_GRAPH=empty; X_SURVEY_NAV=files; return 0
+  fi
+
+  X_SURVEY_GRAPH=ready; X_SURVEY_NAV=graph
+}
+
+# The glob `codegraph affected` needs in order to recognise this project's
+# tests. Its default matches *.test.* / *.spec.* only, so a Python suite named
+# test_*.py silently comes back empty — an empty answer that reads exactly like
+# "nothing is affected". Deriving the glob here is what stops that.
+x_survey_graph_test_glob() {
+  local names
+  names=$(x_survey_files | LC_ALL=C tr '\0' '\n')
+  if printf '%s\n' "$names" | LC_ALL=C grep -qE '(^|/)test_[^/]*\.py$'; then
+    printf '**/test_*.py'
+  elif printf '%s\n' "$names" | LC_ALL=C grep -qE '_test\.go$'; then
+    printf '**/*_test.go'
+  elif printf '%s\n' "$names" | LC_ALL=C grep -qE '\.(test|spec)\.[jt]sx?$'; then
+    printf '**/*.{test,spec}.{ts,tsx,js,jsx}'
+  else
+    printf ''
+  fi
+}
+
+# Written only when the graph is usable. Deliberately thin: readiness, the test
+# glob, and the command menu. An earlier version also probed the most
+# depended-on symbols, which meant 40 sequential `codegraph callers` processes
+# and took ~11s on a 353-file project — far too much for something that runs on
+# every rebuild, and the wrong shape besides. Fan-in is a question to ask about
+# the symbols a task actually touches, which is what the skills now do.
+x_survey_section_graph() {
+  [[ ${X_SURVEY_GRAPH:-} == ready ]] || return 0
+  printf '## Code graph\n\n'
+  printf -- '- Index: ready, %s nodes\n' "$X_SURVEY_GRAPH_SYMBOLS"
+
+  local glob
+  glob=$(x_survey_graph_test_glob || true)
+  if [[ -n $glob ]]; then
+    printf -- '- `affected` needs this test glob here: `-f "%s"`\n' "$glob"
+  fi
+  printf '\n'
+
+  printf 'Ask the graph before opening files:\n\n'
+  printf '```bash\n'
+  printf 'codegraph callers <symbol>   # who calls it, by name and file:line\n'
+  printf 'codegraph callees <symbol>   # what it depends on\n'
+  printf 'codegraph impact  <symbol>   # transitive blast radius (-d for depth)\n'
+  printf '```\n\n'
+  printf 'Plain output, not `--json`: the JSON envelope is about twice the bytes and\n'
+  printf 'carries the same facts. Open files only for the few symbols these point at.\n\n'
+}
+
 x_survey_render() {
   printf '<!-- Generated by `xdh survey`. Machine-derived facts only: no judgement, no prose.\n'
   printf '     Read this instead of walking the tree. Open individual files only where a\n'
@@ -249,6 +393,7 @@ x_survey_render() {
   x_survey_section_docs
   x_survey_section_tests
   x_survey_section_devex
+  x_survey_section_graph
   x_survey_section_hotspots
 }
 
@@ -283,7 +428,14 @@ x_survey_ensure() {
 
   if (( ! force )) && [[ -f $file && -f $keyfile ]] && [[ $(cat -- "$keyfile") == "$key" ]]; then
     state=fresh
+    # Nothing moved, so the graph cannot have gone stale either: probe without
+    # paying for a sync.
+    x_survey_graph_probe 0
   else
+    # Rebuilding means the commit or the working tree moved — the one moment a
+    # sync is worth its cost. It runs before the render so the Code graph
+    # section reports post-sync numbers.
+    x_survey_graph_probe 1
     x_survey_render | x_atomic_write "$file"
     x_survey_truncate "$file"
     printf '%s' "$key" | x_atomic_write "$keyfile"
@@ -294,6 +446,9 @@ x_survey_ensure() {
   x_emit X_SURVEY_STATE "$state"
   x_emit X_SURVEY_HEAD "$(git rev-parse HEAD 2>/dev/null || printf 'no-head')"
   x_emit X_SURVEY_BYTES "$(wc -c < "$file" | tr -d ' ')"
+  x_emit X_SURVEY_NAV "${X_SURVEY_NAV:-files}"
+  x_emit X_SURVEY_GRAPH "${X_SURVEY_GRAPH:-absent}"
+  x_emit X_SURVEY_GRAPH_SYMBOLS "${X_SURVEY_GRAPH_SYMBOLS:-0}"
 }
 
 # Report where the survey lives without building it, so a caller can decide
@@ -310,4 +465,9 @@ x_survey_path() {
     x_emit X_SURVEY_STATE absent
     x_emit X_SURVEY_BYTES 0
   fi
+  # Report-only: never syncs, so a caller can ask what state things are in
+  # without paying for anything.
+  x_survey_graph_probe 0
+  x_emit X_SURVEY_NAV "${X_SURVEY_NAV:-files}"
+  x_emit X_SURVEY_GRAPH "${X_SURVEY_GRAPH:-absent}"
 }

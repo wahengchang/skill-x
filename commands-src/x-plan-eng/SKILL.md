@@ -75,6 +75,11 @@ patterns, interfaces, schemas, migrations, configuration, and the tests that
 already cover it. Cite `file:line`. A question the code answers is never an
 Owner question, and a plan that contradicts the code is worse than no plan.
 
+When `X_SURVEY_NAV=graph`, ask the index for relationships instead of reading
+files to infer them — the survey's `## Code graph` section carries the commands.
+Those answers tell you which few files are worth opening; they do not replace
+reading the code you are about to change.
+
 Read the area, not the project. The survey is what tells you where the area is;
 re-walking the whole tree here is duplicated work, because discovery already did
 it and its conclusions are in `hub.md`.
@@ -165,6 +170,21 @@ fingerprinted sections from step 4:
   numbered items or checked boxes, and an unchecked `- [ ]` counts as nothing.
 - **Definition of Ready** — every box ticked before `plan check`, except
   `Owner/WG/branch/worktree`, which the WG step satisfies.
+
+On the `graph` route, three of those have a mechanical source. Use it — a
+guessed blast radius is the most expensive kind of wrong:
+
+| Section | Ask |
+|---|---|
+| Interfaces / dependencies | `codegraph callees <symbol>`, `codegraph node <symbol>` for the exact signature |
+| Failure modes / risks | `codegraph impact <symbol> -d 2` — the real reachable set |
+| Tests | `codegraph affected <changed files> -f "<glob>"`, glob from the survey |
+
+`affected` is a **positive signal only**. It follows import edges, so it finds
+tests that import the code and returns nothing for suites that exercise it
+through a browser or a subprocess — and it returns that emptiness silently,
+reading exactly like "no tests are affected". Never let an empty result stand as
+evidence that no test is needed.
 
 The reasoning itself — why this architecture, what was rejected, which
 `file:line` the current behavior came from — goes in `## Engineering Facet`,
