@@ -41,6 +41,8 @@ XDH_TEMPLATES=$(cd -- "$XDH_DIR/.." && pwd)/templates
 . "$XDH_LIB/clean.sh"
 # shellcheck source=lib/plan.sh
 . "$XDH_LIB/plan.sh"
+# shellcheck source=lib/survey.sh
+. "$XDH_LIB/survey.sh"
 
 x_usage() {
   cat <<'EOF'
@@ -49,6 +51,10 @@ xdh — deterministic helper for the x-* development-cycle skills
 Locations
   xdh paths                          Resolve main repo root and .dev-hub paths
   xdh init                           Create .dev-hub skeleton + .gitignore entries
+
+Project survey
+  xdh survey ensure [--force]        Build/reuse the machine-derived project snapshot
+  xdh survey path                    Report the snapshot path and freshness only
 
 Cycles
   xdh cycle new --slug S [--title T] [--scope S] [--prompt P]
@@ -78,6 +84,8 @@ Plan gate
   xdh plan init <file> --route R --selected-work IDs
   xdh plan fingerprint <file>
   xdh plan facet set <file> --facet F --status S --evidence E [--section-file F] [--owner-decision-file F]
+  xdh plan facet set <file> --facet F --status completed|deferred-owner|deferred-missing --reaffirm
+                                     Re-stamp an already-recorded status at the current fingerprint
   xdh plan decision set <file> --id OD-NNN --facet F --question Q --decision D --state S
   xdh plan check <file>
   xdh plan ready <file>
@@ -260,6 +268,15 @@ x_cmd_runtime() {
   x_runtime_new "$@"
 }
 
+x_cmd_survey() {
+  local sub=${1:-}; shift || true
+  case $sub in
+    ensure) x_survey_ensure "$@" ;;
+    path) x_survey_path "$@" ;;
+    *) x_die "survey: unknown subcommand '${sub:-}'" ;;
+  esac
+}
+
 x_cmd_init() {
   x_ensure_dev_hub
   x_ensure_gitignore
@@ -280,6 +297,7 @@ main() {
     field) x_cmd_field "$@" ;;
     fingerprint) x_cmd_fingerprint "$@" ;;
     plan) x_cmd_plan "$@" ;;
+    survey) x_cmd_survey "$@" ;;
     design) x_cmd_design "$@" ;;
     pr) x_cmd_pr "$@" ;;
     worktree) x_cmd_worktree "$@" ;;

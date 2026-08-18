@@ -188,14 +188,14 @@ canonical skill 的唯一來源仍是 `commands-src/<name>/`；不要直接編�
 | `x-plan` | 如何把工作準備到可直接開工？ | 分派 Product→Design→DevEx→Engineering 四面向，產出 `IS-*` / `SP-*` / `WG-*`、Owner 與 planning fingerprint |
 | `x-plan-product` | 產品面向：目標、範圍、使用者可見行為與優先序？ | 產品決策與證據、pending Owner Decision |
 | `x-plan-design` | 設計面向：UX、互動與能力（Image Generate / Display / Compare）？ | 設計決策、能力階梯與證據 |
-| `x-plan-devex` | DevEx 面向：setup→首次變更→測試→除錯→CI/release 的旅程？ | 各階段可驗證的證據 |
+| `x-plan-devex` | DevEx 面向：setup→首次變更→測試→除錯→CI/release 的旅程？ | 專案層級收集一次；每項工作只驗證它實際動到的階段 |
 | `x-plan-eng` | 工程面向：每項工作工程上怎麼做？ | `## Engineering Facet`、架構 / 資料流 / 測試 / 驗收 |
 | `x-review` | 這份最終內容有什麼真實風險？ | `RV-*`（含 severity、`file:line`、失效情境） |
 | `x-debug` | 已知問題的 root cause 是什麼？ | `DBG-*`、根因修正與 regression test |
 | `x-ship` | 能否安全交付，並形成一個 PR？ | commits、pushed branch、create-or-update 的單一 PR |
 | `x-housekeeping` | 哪些執行殘留已可安全刪除？ | 清理結果與 `.dev-hub/logs/cycle-*.md` |
 
-`x-plan` 是規劃階段的 orchestration 入口：它先解析唯一 scope 與 target，把每項工作依「Product → Design → DevEx → Engineering」的順序分派給對應的 specialist（Engineering 一律 mandatory、永遠最後），每個 facet 以「自己的唯一寫入指令」記錄決策與證據，最後用 `plan check → wg new → plan ready` 這道 gate 讓 new-format 的工作項到達 `ready`。整份計畫綁定在確定性的 planning fingerprint 上，內容一改 fingerprint 就失效。
+`x-plan` 是規劃階段的 orchestration 入口：它先解析唯一 scope 與 target，再決定 route。**預設 route 只有 `engineering`**——Product / Design / DevEx 要你明講、或 `hub.md` 的工作列有標記才會進來；單一 engineering route 直接交給 `x-plan-eng` Direct mode，不走 orchestration。需要多個 facet 時才依「Product → Design → DevEx → Engineering」順序分派（Engineering 一律 mandatory、永遠最後），每個 facet 以「自己的唯一寫入指令」記錄決策與證據，最後用 `plan check → wg new → plan ready` 這道 gate 讓 new-format 的工作項到達 `ready`。整份計畫綁定在確定性的 planning fingerprint 上，實質內容一改 fingerprint 就失效（純排版編輯不會）；結論未受影響的 facet 可用 `xdh plan facet set --reaffirm` 重新蓋章，不必重跑推理。
 
 十顆技能都能只憑「專案背景、repo 文件、程式碼、Prompt」獨立啟動，不需要先有 Cycle。使用者輸入 `continue` 時，接續依據是 artifact 裡的 Handover 區塊，沒有隱藏的全域狀態機。
 
@@ -210,7 +210,7 @@ canonical skill 的唯一來源仍是 `commands-src/<name>/`；不要直接編�
 └── logs/        完成 Cycle 的短紀錄（tracked，唯一會進 Git 的部分）
 ```
 
-重複、可驗證的操作由技能資料夾內的 `scripts/xdh` 負責：從任一 worktree 解析共用 `.dev-hub`、發配不重複的 ID、冪等地建立 Cycle / work item / WG / branch / worktree、計算綁定內容的 review fingerprint、create-or-update 單一 PR，以及只刪除「已證明安全」的殘留。所有輸出都是 `KEY=value`，重跑不會產生第二份 Cycle、worktree 或 PR。
+重複、可驗證的操作由技能資料夾內的 `scripts/xdh` 負責：從任一 worktree 解析共用 `.dev-hub`、產出並快取專案概況（`xdh survey ensure`）、發配不重複的 ID、冪等地建立 Cycle / work item / WG / branch / worktree、計算綁定內容的 review fingerprint、create-or-update 單一 PR，以及只刪除「已證明安全」的殘留。所有輸出都是 `KEY=value`，重跑不會產生第二份 Cycle、worktree 或 PR。
 
 ```bash
 bin/doctor.sh                       # 確認技能已同步

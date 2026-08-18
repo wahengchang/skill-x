@@ -53,6 +53,12 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 13. **開發週期狀態一律 project-local**：`x-*` 技能組的所有執行期狀態放在 repo 內的 `.dev-hub/`，不使用 `~/.x-*` 或系統 `/tmp`。`active/`、`worktrees/`、`runtime/` 由 `xdh` 自動加進 `.gitignore`；只有 `logs/` 進 Git。理由是可稽核與可丟棄：一個 Cycle 的全部痕跡都能用一般 Git 指令檢視或清掉，換機器也不會帶著看不見的全域狀態。
 14. **target 擴充走 metadata + adapter**：加新 runtime 時，讀 canonical `SKILL.md` 的加進 `CANONICAL_CONSUMERS`、需要不同表示的加 adapter 腳本並登記到 `TRANSFORMED_TARGETS`。build pipeline 不需要改。
 
+15. **token 成本是設計約束，不是事後最佳化**：技能的 `SKILL.md` 每次執行都整份載入，所以它的大小是**每次呼叫**都要付的成本。三條規則因此成立：(a) 機械可得的事實由 `xdh` 產出，不由 AI 逐檔讀取——`xdh survey ensure` 把專案概況（layout、entry point、文件、測試、DevEx 指令、變更熱點）收集成一份有 8 KB 上限的快取，以 commit + working tree + schema 版號為 key，變了才重收；`x-discovery` 與 `x-plan-eng` 都消費同一份，不各掃一次。(b) 同一段內容只放一個地方——facet contract 由 specialist 自己讀，orchestrator 只讀 `references/facet-dispatch.md`；`## Provenance` 是 repository 的維護史而非 agent 的指令，由 `bin/build.sh` 在建置時剝除，只留在 `commands-src/`。(c) 上限要有測試守住——`tests/survey-regression.sh` 對每顆部署版技能斷言位元組上限，否則規則會一次補一點又長回去。
+
+16. **預設路由只有 engineering**：實務上絕大多數工作只需要工程面向。Product / Design / DevEx 必須由使用者明講或 `hub.md` 標記才進 route，不由「感覺像產品問題」自動展開；route 只有 `engineering` 時 `x-plan` 直接交棒 `x-plan-eng` Direct mode，不走 orchestration——單一 facet 走 orchestration 只多一次 fingerprint 交接與一次 contract 載入，換不到任何東西。DevEx 的「開發者旅程」是**專案**屬性不是工作項屬性，收集一次後每項工作只回答「有沒有動到」。
+
+17. **fingerprint 只對實質變動反應**：planning fingerprint 是為了偵測「規劃輸入的意義改了」。原本對原始位元組雜湊，連 tab、重複空白、多一行空行都會 rotate，把所有已完成的 facet 標成 stale——防呆變成噪音。`x_plan_normalize_body` 在雜湊前做保守正規化（tab 展開、行內連續空白、行尾空白、連續空行），但**保留前導縮排**，因為它承載清單層級，是語意。結論未受影響的 facet 用 `xdh plan facet set --reaffirm` 重新蓋章：它只能平移一個已經記錄過的同類狀態，永遠無法無中生有一個 completed。
+
 ## 核心機制
 
 ### Build
@@ -90,6 +96,7 @@ adapter 的 action contract 固定為：`build <canonical-staging-dir> <artifact
 | 子指令 | 責任 |
 | --- | --- |
 | `paths` / `init` | 以 `git rev-parse --git-common-dir` 從任一 linked worktree 解析回 main repo，建立 `.dev-hub` 骨架與 `.gitignore` |
+| `survey ensure/path` | 產出並快取專案概況（layout、entry point、文件、測試、DevEx 指令、變更熱點），8 KB 上限；以 commit + working tree + schema 版號為 key，變了才重收 |
 | `cycle new/list/show/check/close` | 建立或沿用 Cycle、關閉前檢查 gate、把完成 Cycle 壓成 `logs/` 短紀錄 |
 | `id next`、`item new`、`wg new`、`artifact new` | 在 `mkdir` 互斥鎖內完成「檢查既有 → 配號 → 建檔」，避免兩個 agent 拿到同一個編號 |
 | `plan init / facet set / decision set / fingerprint / check / ready` | 初始化規劃路由、以 scoped writer 記錄 facet 與 Owner Decision 狀態、計算 planning fingerprint、檢查並放行 new-format 工作項到 `ready` |
@@ -100,19 +107,24 @@ adapter 的 action contract 固定為：`build <canonical-staging-dir> <artifact
 | `worktree`、`clean scan/apply` | 分類 SAFE / DIRTY / UNMERGED / ACTIVE / ORPHAN，只刪 SAFE，且刪前再檢查一次 |
 
 facet 合約的單一權威來源是 `commands-src/_x-shared/facets/`：四份合約
-（`product` / `design` / `devex` / `engineering`）各只有一份，`x-plan` 以
-symlink 收斂進自己的 `references/<facet>-facet-contract.md`、每個 owning
-specialist 以 symlink 收斂成自己的 `references/facet-contract.md`；`bin/build.sh`
+（`product` / `design` / `devex` / `engineering`）各只有一份，由**owning
+specialist** 以 symlink 收斂成自己的 `references/facet-contract.md`；`bin/build.sh`
 用 `find -L` + `cp -aL` 解引用，讓 `commands/<skill>/references/` 得到**自給自足
 的真實副本**（與 scripts/templates 相同的決策 #12 收斂方式）。
 
-六個設計選擇值得說明：
+`x-plan` **不**收斂這四份合約。orchestrator 需要的是「分派誰、傳什麼、回來查
+什麼」，那是它自己的 `references/facet-dispatch.md`；合約要等 specialist 真的
+跑起來才需要，由 specialist 自己讀。兩邊都帶會讓同一份內容在一次規劃裡進
+context 兩次（決策 #15）。
+
+七個設計選擇值得說明：
 
 - **Fingerprint 綁內容，不綁時間。** 用暫時 `GIT_INDEX_FILE` 做 `read-tree` + `add -A` + `write-tree`，得到的 tree 同時涵蓋已 commit 與未 commit 的內容，因此「把未 commit 的東西 commit 起來」不會改變 fingerprint，而任何一個字元的改動都會。快照前會先把 `.dev-hub/active|runtime|worktrees` 從暫時 index 移除，否則這個指令自己產生的暫存檔會讓結果不穩定。
 - **「檢查既有」與「配號建檔」必須在同一個 critical section。** `id next` 只是查詢；真正保證不重號的是 `cycle new` / `item new` / `wg new` / `artifact new`——它們在同一個鎖裡完成「掃描是否已存在 → 取最大號 +1 → 寫檔（讓下一次掃描看得到）」。只鎖住配號、把寫檔留到鎖外，會讓兩個同時規劃的 agent 都掃到空目錄、都拿到 `WG-001`。`cycle new` 也要上鎖：目錄名帶到分鐘的時間戳，跨分鐘邊界的兩個併發呼叫會建出兩個同 slug 的 active Cycle，之後每一次 lookup 都變成 ambiguous。
 - **worktree 的「已註冊」不等於「可用」。** 目錄被手動刪掉時 `git worktree list` 仍會列出它。所以重用前要確認 `path/.git` 真的存在、而且 HEAD 就在預期的 branch 上；註冊是 stale 就 `git worktree prune` 後重建，路徑被無關內容佔用則直接停下來，不覆蓋。
 - **機器可讀記錄一律 TSV。** 路徑會含空白（macOS 的 `My Projects`、`Mobile Documents` 是常態），所以以空白分隔的記錄不是格式而是陷阱：`clean apply` 曾用 `read -r _ class kind target rest` 解析，repo 位於 `/home/u/proj v2/` 時 `target` 被截成 `/home/u/proj`，dirty 護欄因為 `git -C <截斷路徑>` 失敗而靜默通過，`rm -rf` 則打到一個真實存在的同層目錄。現在 `clean scan`、`worktree list` 與 `pr` 查詢一律 tab 分隔、以 `IFS=$'\t'` 讀取；刪除前另有一道與解析無關的收容檢查，確保任何 kind 都只能刪到它該待的目錄底下。
 - **standalone scope 必須是固定路徑。** 沒有 Cycle 時，規劃文件的 scope 曾用 `xdh runtime new` 產生帶秒級時間戳的目錄，等於每次呼叫都換一個位置：reuse 掃描永遠掃到空的、ID 每次從 001 重來、跨分鐘重跑會替同一個 slug 生出第二條 branch 與第二個 worktree，而且鎖開在那個每次都不同的目錄裡——standalone 模式根本沒有互斥。現在固定為 `.dev-hub/runtime/standalone/`，Cycle 模式與 standalone 模式走同一套 reuse／配號／上鎖邏輯。相對的，`clean scan` 也必須知道「含有未終結 WG／work item 的 runtime 目錄是活的」，否則保留期一過就會把還開著的 Work Group 刪掉。work item 與 WG 的終結狀態不同（前者 done/cancelled/deferred，後者 merged/closed/…），這個判斷收斂在 `x_status_is_terminal`，避免 closure gate 與 housekeeping 兩處各寫一份而漂移。
+- **auxiliary 檔案的收容邊界要從 item 解析，不能從 cwd。** `--section-file` 與 `--owner-decision-file` 的「必須在專案內」檢查原本比對 `X_MAIN_ROOT`，而那是由**行程的工作目錄**解析出來的。一旦 WG 有了自己的 worktree，agent 的 cwd 就不等於 item 所在的 repo，於是每一個合法的 section file 都被判成 `section-file-outside-project`。現在改用 `x_plan_project_root_for <item>`，與 `x_plan_mutable_target` 用同一個依據。舊測試只驗過拒絕路徑，所以這個 bug 一直沒被看見——收容檢查一定要連 happy path 一起測。
 - **PR 不能只用 branch name 當 key。** branch 推到 fork 時，同一個 base repository 上可能有多個 fork 都開著叫 `fix` 的 PR。因此查詢會同時比對 `headRefName` 與 `headRepositoryOwner`（owner 由 push remote 的 URL 推得）；仍然分不出來時回報 `X_PR_STATE=ambiguous` 並拒絕更新，而不是賭一個把別人的 PR body 蓋掉。查詢用 `gh --jq` 輸出 TSV，比對留在 shell 字串比較，既避免手寫 JSON parser，也讓這段邏輯可以被測試。
 ### 生命週期與安裝 manifest
 

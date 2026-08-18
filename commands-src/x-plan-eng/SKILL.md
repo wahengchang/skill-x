@@ -59,10 +59,25 @@ selection before starting so the Owner can interrupt.
 
 ### 2. Read the repository first
 
-Confirm the current state before proposing a change: existing patterns,
-interfaces, schemas, migrations, configuration, and the tests that already
-cover the area. Cite `file:line`. A question the code answers is never an Owner
-question, and a plan that contradicts the code is worse than no plan.
+Start from the shared survey, not from a fresh scan:
+
+```bash
+"$XDH" survey ensure
+```
+
+`X_SURVEY_FILE` is the same bounded snapshot `x-discovery` uses — layout, entry
+points, docs, tests, DevEx commands, change hotspots. When discovery already ran
+in this repository the file is still valid (`X_SURVEY_STATE=fresh`) and costs one
+read; the command rebuilds only when the commit or the working tree moved.
+
+Then confirm the current state **of the area this item touches** — existing
+patterns, interfaces, schemas, migrations, configuration, and the tests that
+already cover it. Cite `file:line`. A question the code answers is never an
+Owner question, and a plan that contradicts the code is worse than no plan.
+
+Read the area, not the project. The survey is what tells you where the area is;
+re-walking the whole tree here is duplicated work, because discovery already did
+it and its conclusions are in `hub.md`.
 
 Also challenge the scope before defining it:
 
@@ -192,10 +207,17 @@ with its branch checked out. `status=worktree-unregistered` or
 — repair the worktree, do not edit the WG document to match.
 
 If the fingerprint rotated between step 4 and here, `plan check` reports
-`facet=engineering status=stale`. Re-read the fingerprint, re-record the facet
-at the new value, and carry any accepted Owner Decision forward under a fresh OD
-ID — an accepted row cannot be moved to a new fingerprint
-(`decision=<id> status=id-collision`).
+`facet=engineering status=stale`. Re-read the fingerprint and re-record the
+facet at the new value. When the edit that rotated it does not change the
+engineering conclusion — confirm that by re-reading `## Engineering Facet`, not
+by assuming it — re-stamp in one command instead of re-deriving:
+
+```bash
+"$XDH" plan facet set <item> --facet engineering --status completed --reaffirm
+```
+
+Carry any accepted Owner Decision forward under a fresh OD ID — an accepted row
+cannot be moved to a new fingerprint (`decision=<id> status=id-collision`).
 
 ### 8. Write back and check consistency
 

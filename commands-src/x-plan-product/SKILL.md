@@ -44,63 +44,30 @@ Direct mode never silently adopts a recommendation, never creates an `IS` /
 
 ## Facet mode
 
-This is the portion that runs as a facet inside `x-plan` orchestration. It must
-follow `references/facet-contract.md`.
+This is the portion that runs as a facet inside `x-plan` orchestration. Read
+`references/facet-contract.md` and follow it.
 
-The facet reads the item's `Product facet` / `Product evidence` fields and its
-`## Problem / Goal`, `## Scope`, and `## Owner Decisions` sections, resolves the
-product facet, and writes back via the sole Facet-mode writer:
+The orchestrator hands over the item's file path, the facet name, and the
+current fingerprint. Resolve the product facet and write back through the sole
+Facet-mode writer:
 
 ```bash
 xdh plan facet set <item> --facet product --status <value> --evidence <ref> [--section-file <f>]
 ```
 
-`<value>` is one of `pending | in-progress | blocked |
-completed@<fp> | deferred-owner@<fp> | deferred-missing@<fp>`. Completion
-records `completed@<current fingerprint>`; the fingerprint is reported by the
-read-only `xdh plan fingerprint <item>`.
+Everything else about this facet — intake, evidence, permitted fields, the
+status vocabulary, deferral rules and forbidden lifecycle mutations — is in
+`references/facet-contract.md`. Follow it there; it is the canonical text and
+restating it here only doubled what a plan loads into context.
 
-The two deferred values are Owner-sanctioned, never a shortcut past work the
-facet could have done: `plan check` accepts a deferral only when an Owner
-Decision for this facet is accepted at the same fingerprint, and otherwise
-rejects it as `facet=product status=deferred-unaccepted` — and that row must carry
-this facet's name, not another's. `deferred-missing` means this specialist could
-not run on the host at all; a capability missing *inside* it downgrades the
-method, never the status. A status carrying a fingerprint must carry the current
-one; anything older is reported as stale.
-
-Product records every scope expansion, reduction, or redefinition as a pending
-Owner Decision and stops — it never silently adopts a recommended answer, and
-never expands, reduces, or redefines scope on its own authority.
-
-Product is the one facet that may open its own decision row, and only together
-with a blocked status: write a project-local file holding the single complete
-pending row — `| OD-001 | product | <question> | <recommendation> | pending | — |`,
-with the recommendation in the `Decision` cell — and pass it to the same writer:
-
-```bash
-xdh plan facet set <item> --facet product --status blocked --evidence <ref> \
-  --owner-decision-file <f>
-```
-
-Fields, section, and row are replaced together, so the blocked status and the
-question it is blocked on can never disagree. The writer rejects the file for any
-other facet, for any status but `blocked`, and for a row whose ID already exists
-with different content.
-
-Name in the question the exact canonical input the accepted answer would change
-— `## Problem / Goal`, `## Scope`, `## Current → Desired Behavior`, the route, or
-the selected work. That is what lets the orchestrator apply the edit first and
-accept the decision at the resulting fingerprint, instead of stranding an
-accepted row on a fingerprint that no longer exists.
-
-After the Owner answers, the orchestrator accepts that same decision ID with
-`xdh plan decision set` at the current fingerprint before Product completes.
-
-This facet must never create an item (`item new`), create a Work Group
-(`wg new`), create a worktree or branch, run the generic `field set`, or run
-`plan ready`. The facet's only item mutation is the `xdh plan facet set` write
-above.
+Two things are worth repeating here because they are what Product gets wrong.
+Product records every scope expansion, reduction, or redefinition as a
+**pending** Owner Decision and stops — it never silently adopts its own
+recommendation. And it is the one facet that may open that row itself, only
+together with a `blocked` status, via `--owner-decision-file`; name in the
+question the exact canonical input an accepted answer would change
+(`## Problem / Goal`, `## Scope`, `## Current → Desired Behavior`, the route, or
+the selected work), so the orchestrator can edit first and accept second.
 
 ## Provenance
 

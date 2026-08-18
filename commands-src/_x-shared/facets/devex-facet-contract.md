@@ -12,7 +12,7 @@ The devex facet reads:
 - the item's `DevEx facet` and `DevEx evidence` fields;
 - the `## Scope` and `## Current → Desired Behavior` sections of the `IS` / `SP`
   document;
-- repository documents, build / test / debug / CI configuration, and any
+- the `## DevEx commands` section of `xdh survey ensure`, and any
   `## Owner Decisions` rows that affect the developer experience.
 
 It never reads the Product, Design, or Engineering facet sections, and never
@@ -20,11 +20,26 @@ touches their fields.
 
 ## Evidence requirements
 
-The devex facet must record as `DevEx evidence` a reference to the full
-developer journey the specialist verified, from setup through first change,
-test, debug, and CI/release. Each stage must be backed by real evidence — a
-command that ran, a config file that exists, a pipeline step that is defined —
-never an assumption.
+The developer journey — setup, first change, test, debug, CI/release — is a
+**property of the project, not of a work item**, so it is established once and
+reused. `xdh survey ensure` collects the mechanically knowable part of it (Make
+targets, package scripts, CI steps) and caches it against the commit and the
+working tree.
+
+Per item, the devex facet answers one question: **does this change touch any
+stage of that journey?**
+
+- **It does not** — the common case. Record `not-applicable` and name the
+  journey stages the change leaves untouched. Do not re-verify them.
+- **It does** — verify *only the affected stages*, with real evidence: a command
+  that ran, a config file that exists, a pipeline step that is defined. Record
+  as `DevEx evidence` a reference to that verification.
+
+Re-walking the entire journey for every work item is what this contract used to
+require and now forbids: it re-derives the same project-level facts once per
+item at a cost that scales with the backlog. A stage the survey could not
+determine mechanically and that this change actually touches is still verified
+by hand — never assumed.
 
 ## Permitted fields and section
 

@@ -96,8 +96,12 @@ skill_x_test_ensure_template() {
     "$SKILL_X_TEST_TEMPLATE/.git" \
     "$SKILL_X_TEST_TEMPLATE/commands" \
     "$SKILL_X_TEST_TEMPLATE/opencode-commands"
-  # Agent-local state is not part of a fresh repository fixture.
-  rm -rf "$SKILL_X_TEST_TEMPLATE/.claude"
+  # Agent-local state is not part of a fresh repository fixture. .dev-hub holds
+  # whatever Cycles, worktrees and survey caches the developer's own checkout
+  # accumulated; carrying those in makes fixtures depend on local history — and
+  # since only its logs/ is tracked, the rest reads as ignored-but-precious
+  # content that blocks `uninstall --remove-checkout`.
+  rm -rf "$SKILL_X_TEST_TEMPLATE/.claude" "$SKILL_X_TEST_TEMPLATE/.dev-hub"
 
   # `example-skill` and `funny-text-rewriter` used to be shipped sample skills.
   # Keep their stable names only as test fixtures so long-lived regression cases

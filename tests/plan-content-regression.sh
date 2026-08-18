@@ -125,11 +125,22 @@ test_specialist_facet_mode_sections_have_no_runnable_forbidden() {
 
 test_x_plan_references_only_local_facet_contracts() {
   local skill="$PROJECT_ROOT/commands-src/x-plan/SKILL.md"
+  # The orchestrator reads a dispatch table, never the facet contracts: it
+  # dispatches specialists, and each specialist reads its own contract. Loading
+  # both put the same content into an agent's context twice per plan.
+  rg -qF 'references/facet-dispatch.md' "$skill"
   for facet in product design devex engineering; do
-    rg -qF "references/$facet-facet-contract.md" "$skill"
+    assert_absent "references/$facet-facet-contract.md" "$skill" || return 1
   done
   assert_absent 'commands-src/x-plan-' "$skill" || return 1
   assert_absent '_x-shared/facets/' "$skill" || return 1
+
+  # Whatever it does read must be bundled locally, never reached for across a
+  # sibling skill path that a synced installation cannot guarantee exists.
+  local dispatch="$PROJECT_ROOT/commands-src/x-plan/references/facet-dispatch.md"
+  [[ -f $dispatch ]] || { echo 'x-plan references/facet-dispatch.md missing' >&2; return 1; }
+  assert_absent 'commands-src/x-plan-' "$dispatch" || return 1
+  assert_absent '_x-shared/facets/' "$dispatch" || return 1
 }
 
 test_x_plan_has_precedence_ladder_and_mandatory_engineering() {
@@ -156,9 +167,13 @@ test_new_skills_have_symlinks_and_references() {
     [[ -f "$PROJECT_ROOT/commands-src/$s/scripts/xdh" ]] || { echo "scripts symlink does not resolve: $s" >&2; return 1; }
     [[ -f "$PROJECT_ROOT/commands-src/$s/templates/issue.md" ]] || { echo "templates symlink does not resolve: $s" >&2; return 1; }
   done
+  # x-plan owns its dispatch table outright — there is no shared source to
+  # symlink, because no other skill needs it.
+  local dispatch="$PROJECT_ROOT/commands-src/x-plan/references/facet-dispatch.md"
+  [[ -f "$dispatch" && ! -L "$dispatch" ]] || { echo 'x-plan references/facet-dispatch.md missing' >&2; return 1; }
   for facet in product design devex engineering; do
-    local link="$PROJECT_ROOT/commands-src/x-plan/references/$facet-facet-contract.md"
-    [[ -L "$link" && -f "$link" ]] || { echo "x-plan references/$facet-facet-contract.md missing/broken" >&2; return 1; }
+    local stale="$PROJECT_ROOT/commands-src/x-plan/references/$facet-facet-contract.md"
+    [[ ! -e "$stale" ]] || { echo "x-plan should not bundle $facet-facet-contract.md" >&2; return 1; }
   done
   for s in x-plan-product x-plan-design x-plan-devex x-plan-eng; do
     local link="$PROJECT_ROOT/commands-src/$s/references/facet-contract.md"
@@ -217,9 +232,11 @@ test_build_materializes_references_as_real_files() {
   copy_built_project "$project"
 
   local p
+  p="$project/commands/x-plan/references/facet-dispatch.md"
+  [[ -f "$p" && ! -L "$p" ]] || { echo "not a real file: $p" >&2; return 1; }
   for facet in product design devex engineering; do
     p="$project/commands/x-plan/references/$facet-facet-contract.md"
-    [[ -f "$p" && ! -L "$p" ]] || { echo "not a real file: $p" >&2; return 1; }
+    [[ ! -e "$p" ]] || { echo "orchestrator bundled a facet contract: $p" >&2; return 1; }
   done
   for s in x-plan-product x-plan-design x-plan-devex x-plan-eng; do
     p="$project/commands/$s/references/facet-contract.md"
@@ -248,15 +265,17 @@ run_test 'build materializes references as real files' test_build_materializes_r
 
 test_product_scope_stop_and_no_silent_defaults() {
   local skill="$PROJECT_ROOT/commands-src/x-plan-product/SKILL.md"
-  rg -qF 'pending Owner Decision' "$skill"
-  rg -qF 'never silently adopts a recommended answer' "$skill"
+  rg -qF 'pending' "$skill"
+  rg -qF 'Owner Decision' "$skill"
+  rg -qF 'never silently adopts its own' "$skill"
 
   local contract="$FACETS_DIR/product-facet-contract.md"
   rg -qF 'stop there rather than silently adopting' "$contract"
 
-  # The orchestrator must forbid silently applying a default to a facet decision.
-  local orchestrator="$PROJECT_ROOT/commands-src/x-plan/SKILL.md"
-  rg -qF 'must never silently apply a default' "$orchestrator"
+  # The orchestrator must forbid silently applying a default to a facet
+  # decision. That rule travelled with the dispatch procedure.
+  local dispatch="$PROJECT_ROOT/commands-src/x-plan/references/facet-dispatch.md"
+  rg -qF 'must never silently apply a default' "$dispatch"
 }
 
 test_input_capability_fallback_is_runtime_agnostic() {
@@ -285,11 +304,17 @@ test_devex_journey_chain() {
   for stage in 'setup' 'first change' 'test' 'debug' 'CI/release'; do
     rg -qF "$stage" "$contract"
   done
-  rg -qF 'never an assumption' "$contract"
+  # The journey is a property of the project, established once and reused; a
+  # work item only reports whether it touches a stage. What may never happen is
+  # a stage being assumed instead of verified.
+  rg -qF 'never assumed' "$contract"
+  rg -qF 'not-applicable' "$contract"
+  rg -qF 'xdh survey ensure' "$contract"
 
   local skill="$PROJECT_ROOT/commands-src/x-plan-devex/SKILL.md"
-  rg -qF 'setup → first change → test → debug → CI/release' "$skill"
+  rg -qF 'setup, first change, test, debug, and CI/release' "$skill"
   rg -qF 'by assumption' "$skill"
+  rg -qF 'survey ensure' "$skill"
 }
 
 test_target_scope_precedence_and_terminal_wg_status() {

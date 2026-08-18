@@ -63,14 +63,28 @@ Cycle or re-register work that is already in the table.
 
 ### 2. Explore before asking
 
-Read what the repository can already tell you: README/ARCHITECTURE/CONTRIBUTING
-and any `AGENTS.md`, entry points, routes, schemas, configuration, tests, and
-`git log` for the areas in scope. Cite what you found — file paths, and line
-numbers when you refer to specific logic. Anything answerable from code or docs
-is never an Owner question.
+Take the mechanical survey first, then read narrowly:
 
-Store large intermediate evidence under `artifacts/discovery/` in the Cycle, not
-in the chat.
+```bash
+"$XDH" survey ensure
+```
+
+`X_SURVEY_FILE` is a bounded, machine-derived snapshot of the project — layout,
+entry points, docs, tests, DevEx commands, and the files history touches most.
+Read it once. It is a cache keyed on the commit and the working tree, so
+`X_SURVEY_STATE=fresh` means nothing changed since it was built and a later
+stage will reuse the same file rather than re-deriving it.
+
+Then open individual files **only where a judgement actually depends on their
+contents** — the entry point whose responsibility is unclear, the schema a
+candidate would change, the test that proves current behavior. Cite what you
+found: file paths, and line numbers when you refer to specific logic. Anything
+answerable from code or docs is never an Owner question.
+
+Scanning the tree yourself when the survey already answers the question is the
+one habit this step exists to prevent. Store large intermediate evidence under
+`artifacts/discovery/` in the Cycle — never paste it into the chat, and never
+read a file into the conversation whole when an excerpt settles the point.
 
 ### 3. Write the four views into `hub.md`
 

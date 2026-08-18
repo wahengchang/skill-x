@@ -665,6 +665,10 @@ append_decision_row() {
   mv "$file.tmp" "$file"
 }
 
+# Pinned so an unintended change to the serialization is caught. These values
+# were last rotated deliberately when x_plan_normalize_body was introduced, so
+# that cosmetic whitespace edits stop staling completed facets; changing them
+# again requires the same kind of deliberate reason.
 test_xdh_plan_fingerprint_matches_golden_reference() {
   local project="$TEST_ROOT/golden" repo="$TEST_ROOT/golden-repo"
   make_xdh_fixture "$project" "$repo"
@@ -673,13 +677,13 @@ test_xdh_plan_fingerprint_matches_golden_reference() {
   emit_full_issue IS-001 engineering > "$file"
   local fp
   fp=$(xdh plan fingerprint "$file" | sed -n 's/^X_PLAN_FINGERPRINT=//p')
-  [[ $fp == 71c303d87c53407627a26845b46876e3b887c74519519903c1b9d2790ca44e4c ]]
+  [[ $fp == ed31a542a67cc117065557dd1bb78f9dee8d896a7640a530b839bc3cf455eaa8 ]]
 
   local sp="$repo/.dev-hub/runtime/standalone/SP-001-g.md"
   emit_full_spike SP-001 > "$sp"
   local fsp
   fsp=$(xdh plan fingerprint "$sp" | sed -n 's/^X_PLAN_FINGERPRINT=//p')
-  [[ $fsp == de8deec48f313ac1e72a4193395c0304af352aaa54c3a2454d6d15d5f4dcef72 ]]
+  [[ $fsp == 07bb68797653e571ff77d401328ce53ab771a998836934517e4fa767ab3d3bc7 ]]
 }
 
 test_xdh_plan_fingerprint_rejects_invalid_selected_work() {
@@ -1345,10 +1349,99 @@ run_test 'RV-012 duplicate semantic section blocks' test_rv012_duplicate_semanti
 run_test 'RV-009 literal owner happy path and reuse repair' test_rv009_literal_owner_happy_path_and_reuse_repair
 run_test 'owner decision upsert is idempotent and transition-safe' test_owner_decision_upsert_lifecycle
 run_test 'owner decision schema and placeholders fail closed' test_owner_decision_schema_and_placeholders_fail_closed
+# The fingerprint must notice a changed planning input and ignore a reformatted
+# one. Before x_plan_normalize_body, a tab, a doubled space or an extra blank
+# line rotated it and staled every completed facet for nothing.
+test_fingerprint_ignores_cosmetic_edits_but_not_real_ones() {
+  local p="$TEST_ROOT/cosmetic" r="$TEST_ROOT/cosmetic-repo" XDH f base after
+  make_xdh_fixture "$p" "$r"
+  XDH="$p/commands/x-plan-eng/scripts/xdh"
+  f="$r/.dev-hub/runtime/standalone/IS-001-cos.md"
+  emit_full_issue IS-001 engineering > "$f"
+  base=$(xdh plan fingerprint "$f" | sed -n 's/^X_PLAN_FINGERPRINT=//p')
+
+  # Trailing whitespace on a fingerprinted line.
+  sed 's/^Current: 30m timeout\. Desired: configurable\.$/Current: 30m timeout. Desired: configurable.   /' "$f" > "$f.t"; mv "$f.t" "$f"
+  after=$(xdh plan fingerprint "$f" | sed -n 's/^X_PLAN_FINGERPRINT=//p')
+  [[ $after == "$base" ]] || { echo "trailing whitespace rotated the fingerprint" >&2; return 1; }
+
+  # A doubled interior space.
+  sed 's/^The session times out and users are kicked out\.$/The session times out and  users are kicked out./' "$f" > "$f.t"; mv "$f.t" "$f"
+  after=$(xdh plan fingerprint "$f" | sed -n 's/^X_PLAN_FINGERPRINT=//p')
+  [[ $after == "$base" ]] || { echo "doubled space rotated the fingerprint" >&2; return 1; }
+
+  # A tab in place of leading spaces.
+  awk '{ if ($0 == "Extend session timeout.") print "\tExtend session timeout."; else print }' "$f" > "$f.t"; mv "$f.t" "$f"
+  after=$(xdh plan fingerprint "$f" | sed -n 's/^X_PLAN_FINGERPRINT=//p')
+  [[ $after != "$base" ]] || { echo "indenting a line should still count as a change" >&2; return 1; }
+
+  # Back to the original text, then an extra blank line inside a section.
+  emit_full_issue IS-001 engineering > "$f"
+  awk '{ print; if ($0 == "No password change.") print "" }' "$f" > "$f.t"; mv "$f.t" "$f"
+  after=$(xdh plan fingerprint "$f" | sed -n 's/^X_PLAN_FINGERPRINT=//p')
+  [[ $after == "$base" ]] || { echo "an extra blank line rotated the fingerprint" >&2; return 1; }
+
+  # A real wording change must still rotate.
+  emit_full_issue IS-001 engineering > "$f"
+  sed 's/^Current: 30m timeout\. Desired: configurable\.$/Current: 60m timeout. Desired: configurable./' "$f" > "$f.t"; mv "$f.t" "$f"
+  after=$(xdh plan fingerprint "$f" | sed -n 's/^X_PLAN_FINGERPRINT=//p')
+  [[ $after != "$base" ]] || { echo "a changed value did not rotate the fingerprint" >&2; return 1; }
+}
+
+# --reaffirm re-stamps a status that is already recorded. It must never be able
+# to create one, and it must leave the facet's own section untouched.
+test_facet_reaffirm_restamps_without_manufacturing_a_completion() {
+  local p="$TEST_ROOT/reaffirm" r="$TEST_ROOT/reaffirm-repo" XDH f fp fp2
+  make_xdh_fixture "$p" "$r"
+  XDH="$p/commands/x-plan-eng/scripts/xdh"
+  f="$r/.dev-hub/runtime/standalone/IS-001-ra.md"
+  emit_full_issue IS-001 engineering > "$f"
+
+  # A facet that has never been recorded cannot be reaffirmed into existence.
+  if xdh plan facet set "$f" --facet engineering --status completed --reaffirm >"$p/never" 2>&1; then
+    echo 'reaffirm manufactured a completion' >&2
+    return 1
+  fi
+  rg -q 'status=reaffirm-not-recorded' "$p/never"
+
+  fp=$(xdh plan fingerprint "$f" | sed -n 's/^X_PLAN_FINGERPRINT=//p')
+  printf 'The middleware reads the store at src/auth.js:42.\n' > "$r/section"
+  xdh plan facet set "$f" --facet engineering --status "completed@$fp" \
+    --evidence 'IS-001 Engineering Facet' --section-file "$r/section" >/dev/null
+
+  # Rotate the fingerprint with a substantive edit.
+  sed 's/^Current: 30m timeout\. Desired: configurable\.$/Current: 45m timeout. Desired: configurable./' "$f" > "$f.t"; mv "$f.t" "$f"
+  fp2=$(xdh plan fingerprint "$f" | sed -n 's/^X_PLAN_FINGERPRINT=//p')
+  [[ $fp2 != "$fp" ]]
+  if xdh plan check "$f" >"$p/stale" 2>&1; then return 1; fi
+  rg -q 'facet=engineering status=stale' "$p/stale"
+
+  xdh plan facet set "$f" --facet engineering --status completed --reaffirm >/dev/null
+  rg -q "^- Engineering facet: completed@$fp2\$" "$f"
+  # Evidence and the reasoning section are carried forward, not overwritten.
+  rg -q '^- Engineering evidence: IS-001 Engineering Facet$' "$f"
+  rg -qF 'The middleware reads the store at src/auth.js:42.' "$f"
+  xdh plan check "$f" >"$p/ok" 2>&1
+  rg -q 'X_PLAN_CHECK=PASS' "$p/ok"
+
+  # A bare status without --reaffirm is still invalid, and --reaffirm refuses a
+  # status that carries a fingerprint.
+  if xdh plan facet set "$f" --facet engineering --status completed --evidence e >"$p/bare" 2>&1; then
+    return 1
+  fi
+  rg -q 'status=invalid' "$p/bare"
+  if xdh plan facet set "$f" --facet engineering --status "completed@$fp2" --reaffirm >"$p/fpd" 2>&1; then
+    return 1
+  fi
+  rg -q 'status=reaffirm-invalid' "$p/fpd"
+}
+
 run_test 'formatting-only scope architecture and tests fail closed' test_formatting_only_scope_architecture_and_tests_fail_closed
 run_test 'plan mutations reject targets outside dev hub' test_plan_mutations_reject_targets_outside_dev_hub
 run_test 'LF CRLF and bare CR share one logical fingerprint' test_lf_crlf_and_bare_cr_have_same_logical_fingerprint
 run_test 'plan mutations preserve CRLF' test_plan_mutations_preserve_crlf
 run_test 'design capabilities are explicit and independent' test_design_capabilities_are_explicit_and_independent
+run_test 'fingerprint ignores cosmetic edits but not real ones' test_fingerprint_ignores_cosmetic_edits_but_not_real_ones
+run_test 'facet reaffirm restamps without manufacturing a completion' test_facet_reaffirm_restamps_without_manufacturing_a_completion
 
 skill_x_test_finish 'plan machine'

@@ -71,6 +71,41 @@ x_plan_encode() {
   printf '%s' "$s"
 }
 
+# Cosmetic normalization applied to a section body *only* on the fingerprint
+# path. The fingerprint exists to notice that a planning input changed its
+# meaning; hashing the raw bytes also made it notice reflowed whitespace, a tab
+# converted to spaces, or a blank line added, and every one of those rotated the
+# fingerprint and staled every completed facet for nothing.
+#
+# Deliberately conservative — leading indentation is preserved verbatim because
+# it carries list nesting, which is semantic. Case, wording, punctuation and
+# line breaks are all untouched, so any real edit still rotates.
+x_plan_normalize_body() {
+  LC_ALL=C awk '
+    {
+      line = $0
+      # Expand tabs to a fixed width so a tab-indented line and its
+      # space-indented equivalent hash alike.
+      while (match(line, /\t/)) {
+        line = substr(line, 1, RSTART - 1) "    " substr(line, RSTART + 1)
+      }
+      indent = line
+      sub(/[^ ].*$/, "", indent)
+      body = line
+      sub(/^ +/, "", body)
+      gsub(/  +/, " ", body)
+      sub(/ +$/, "", body)
+      out = (body == "") ? "" : indent body
+
+      # Collapse runs of blank lines to one, and drop leading blanks entirely.
+      if (out == "") { pending_blank = seen; next }
+      if (pending_blank) { print ""; pending_blank = 0 }
+      print out
+      seen = 1
+    }
+  '
+}
+
 # Body of a section as an encoded single-line field value, requiring the heading
 # to occur exactly once. Emits a BLOCKER (stderr) and exits 1 otherwise.
 x_plan_body_field() {
@@ -82,6 +117,7 @@ x_plan_body_field() {
     return 1
   fi
   body=$(x_plan_section_body "$file" "$heading") || return 1
+  body=$(printf '%s\n' "$body" | x_plan_normalize_body)
   x_plan_encode "$body"
 }
 
@@ -656,11 +692,20 @@ x_plan_mutable_target() {
   printf '%s' "$target"
 }
 
+# The containment boundary for a planning mutation's auxiliary files, resolved
+# from the *item* rather than from the process's working directory. Those two
+# disagree whenever xdh runs from outside the target repository — the ordinary
+# case once a Work Group has its own worktree — and using cwd rejected every
+# legitimate --section-file with `section-file-outside-project`.
+x_plan_project_root_for() {
+  git -C "$(dirname -- "$1")" rev-parse --show-toplevel 2>/dev/null
+}
+
 # The sole Facet-mode writer: one facet's status/evidence fields (and optionally
 # its H2 section body) applied in one staged document and one atomic replacement
 # under one scope lock.
 x_plan_facet_set() {
-  local file="" facet="" status="" evidence="" section_file="" owner_decision_file=""
+  local file="" facet="" status="" evidence="" section_file="" owner_decision_file="" reaffirm=0
   while (( $# )); do
     case $1 in
       --facet) facet=$2; shift 2 ;;
@@ -668,12 +713,18 @@ x_plan_facet_set() {
       --evidence) evidence=$2; shift 2 ;;
       --section-file) section_file=$2; shift 2 ;;
       --owner-decision-file) owner_decision_file=$2; shift 2 ;;
+      --reaffirm) reaffirm=1; shift ;;
       *) file=$1; shift ;;
     esac
   done
   x_require_value --facet "$facet"
   x_require_value --status "$status"
-  x_require_value --evidence "$evidence"
+  # Under --reaffirm the existing evidence reference is carried forward, so the
+  # caller does not have to restate it just to re-stamp a fingerprint.
+  (( reaffirm )) || x_require_value --evidence "$evidence"
+  if (( reaffirm )) && [[ -n $section_file || -n $owner_decision_file ]]; then
+    x_die "plan facet set: --reaffirm takes neither --section-file nor --owner-decision-file"
+  fi
   [[ -n $file && -f $file ]] || x_die "plan facet set: missing item file"
   file=$(x_plan_mutable_target "$file" "plan facet set")
 
@@ -683,7 +734,7 @@ x_plan_facet_set() {
   esac
 
   # Evidence is a single-line, non-placeholder reference.
-  if [[ $evidence == *$'\n'* || $evidence == — || $evidence == - ]]; then
+  if [[ -n $evidence ]] && [[ $evidence == *$'\n'* || $evidence == — || $evidence == - ]]; then
     x_plan_blocker "facet=$facet status=evidence-invalid"
     return 1
   fi
@@ -692,7 +743,7 @@ x_plan_facet_set() {
   scope=$(x_plan_scope_for "$file")
   lock="$scope/.xdh-plan.lock"
   x_lock "$lock"
-  if ! x_plan_facet_set_locked "$file" "$facet" "$status" "$evidence" "$section_file" "$owner_decision_file"; then
+  if ! x_plan_facet_set_locked "$file" "$facet" "$status" "$evidence" "$section_file" "$owner_decision_file" "$reaffirm"; then
     x_unlock
     return 1
   fi
@@ -702,7 +753,7 @@ x_plan_facet_set() {
 }
 
 x_plan_facet_set_locked() {
-  local file=$1 facet=$2 status=$3 evidence=$4 section_file=$5 owner_decision_file=$6
+  local file=$1 facet=$2 status=$3 evidence=$4 section_file=$5 owner_decision_file=$6 reaffirm=${7:-0}
   local route canon
   route=$(x_field_get "$file" "Planning route")
   [[ -n $route ]] || { x_plan_blocker "section=Planning-route status=missing"; return 1; }
@@ -712,6 +763,33 @@ x_plan_facet_set_locked() {
 
   local fp
   fp=$(x_plan_compute_fingerprint "$file") || return 1
+
+  # --reaffirm re-stamps a conclusion that is already recorded, at the current
+  # fingerprint. It exists because a rotated fingerprint stales every completed
+  # facet, and re-deriving reasoning that did not change is pure cost. It can
+  # only ever move a status sideways: the facet must already hold the same kind
+  # of status at some fingerprint, so this can never manufacture a completion.
+  if (( reaffirm )); then
+    case $status in
+      completed|deferred-owner|deferred-missing) ;;
+      *) x_plan_blocker "facet=$facet status=reaffirm-invalid value=$status"; return 1 ;;
+    esac
+    local rcap rcur
+    rcap=$(x_plan_facet_cap "$facet")
+    rcur=$(x_field_get "$file" "$rcap facet")
+    if [[ $rcur != "$status"@* ]]; then
+      x_plan_blocker "facet=$facet status=reaffirm-not-recorded actual=${rcur:-—}"
+      return 1
+    fi
+    if [[ -z $evidence ]]; then
+      evidence=$(x_field_get "$file" "$rcap evidence")
+      if [[ -z $evidence || $evidence == — || $evidence == - ]]; then
+        x_plan_blocker "facet=$facet status=reaffirm-no-evidence"
+        return 1
+      fi
+    fi
+    status="$status@$fp"
+  fi
 
   # Engineering is mandatory and can never be deferred or marked not-applicable.
   if [[ $facet == engineering ]]; then
@@ -741,28 +819,32 @@ x_plan_facet_set_locked() {
   fi
 
   local section_content=""
+  local project_root
+  project_root=$(x_plan_project_root_for "$file") ||
+    { x_plan_blocker "facet=$facet status=project-root-unresolvable"; return 1; }
   if [[ -n $section_file ]]; then
     [[ -f $section_file ]] || { x_plan_blocker "facet=$facet status=section-file-missing"; return 1; }
-    x_resolve_paths
     local sec_real
     sec_real=$(x_plan_realpath "$section_file") || { x_plan_blocker "facet=$facet status=section-file-outside-project"; return 1; }
-    [[ $sec_real == "$X_MAIN_ROOT"/* ]] || { x_plan_blocker "facet=$facet status=section-file-outside-project"; return 1; }
+    [[ $sec_real == "$project_root"/* ]] || { x_plan_blocker "facet=$facet status=section-file-outside-project"; return 1; }
     section_content=$(cat -- "$sec_real")
   fi
   # A completed facet must leave substantive evidence in its own section. When
   # callers have no longer brief, its required single-line evidence is retained
   # there rather than allowing an empty completed scaffold.
-  if [[ $status == completed@* && -z $section_content ]]; then
+  # Not under --reaffirm: the facet section already holds the reasoning, and an
+  # empty body means "leave the section alone". Substituting the evidence line
+  # here would overwrite it with a one-liner.
+  if (( ! reaffirm )) && [[ $status == completed@* && -z $section_content ]]; then
     section_content=$evidence
   fi
 
   local decision_row=""
   if [[ -n $owner_decision_file ]]; then
     [[ $facet == product && $status == blocked && -f $owner_decision_file ]] || { x_plan_blocker "facet=$facet status=owner-decision-invalid"; return 1; }
-    x_resolve_paths
     local decision_real
     decision_real=$(x_plan_realpath "$owner_decision_file") || { x_plan_blocker "facet=$facet status=owner-decision-outside-project"; return 1; }
-    [[ $decision_real == "$X_MAIN_ROOT"/* ]] || { x_plan_blocker "facet=$facet status=owner-decision-outside-project"; return 1; }
+    [[ $decision_real == "$project_root"/* ]] || { x_plan_blocker "facet=$facet status=owner-decision-outside-project"; return 1; }
     decision_row=$(cat -- "$decision_real")
     [[ $decision_row != *$'\n'* ]] || { x_plan_blocker "facet=product status=owner-decision-invalid"; return 1; }
     if [[ ! $decision_row =~ ^\|[[:space:]]*OD-[0-9]{3}[[:space:]]*\|[[:space:]]*product[[:space:]]*\|[[:space:]]*[^\|]+[[:space:]]*\|[[:space:]]*[^\|]+[[:space:]]*\|[[:space:]]*pending[[:space:]]*\|[[:space:]]*—[[:space:]]*\|$ ]]; then
