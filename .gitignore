@@ -9,3 +9,6 @@ opencode-commands/
 .dev-hub/active/
 .dev-hub/worktrees/
 .dev-hub/runtime/
+
+# CodeGraph index
+.codegraph/
