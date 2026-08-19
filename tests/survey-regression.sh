@@ -315,6 +315,38 @@ test_graph_route_is_refused_for_a_shell_project() {
   return 0
 }
 
+test_graph_route_survives_a_docs_heavy_project() {
+  # A content system: lots of Markdown, a small real codebase. The code is
+  # exactly what a plan would be written against, so the graph must be
+  # available for it. An earlier version gated on the share of files written in
+  # a supported language, which judged this project by its article count and
+  # refused the graph outright.
+  local project="$TEST_ROOT/docsy" repo="$TEST_ROOT/docsy-repo" bin="$TEST_ROOT/docsy-bin"
+  copy_built_project "$project"
+  mkdir -p "$repo/content" "$repo/src"
+  git init -q -b main "$repo"
+  git -C "$repo" config user.email test@example.invalid
+  git -C "$repo" config user.name 'Test Runner'
+
+  local i
+  for i in $(seq 1 20); do printf '# Article %s\n\nBody.\n' "$i" > "$repo/content/a$i.md"; done
+  for i in 1 2 3; do printf 'export const v%s = %s\n' "$i" "$i" > "$repo/src/m$i.ts"; done
+  git -C "$repo" add -A
+  git -C "$repo" commit -qm initial
+
+  # 3 of 23 files are code: about 13%, well under any share threshold worth
+  # writing, yet the graph is the right way to answer questions about them.
+  mkdir -p "$repo/.codegraph"
+  make_codegraph_stub "$bin" 88
+  run_graph_survey "$repo" "$project/commands/x-discovery/scripts/xdh" "$bin" "$project/out"
+
+  [[ $(survey_kv "$project/out" X_SURVEY_GRAPH) == ready ]] ||
+    { echo "expected ready, got $(survey_kv "$project/out" X_SURVEY_GRAPH)" >&2; return 1; }
+  [[ $(survey_kv "$project/out" X_SURVEY_NAV) == graph ]] ||
+    { echo 'a docs-heavy project with real code was refused the graph' >&2; return 1; }
+  rg -qF '## Code graph' "$(survey_kv "$project/out" X_SURVEY_FILE)"
+}
+
 test_graph_sync_runs_only_when_the_survey_rebuilds() {
   local project="$TEST_ROOT/sync" repo="$TEST_ROOT/sync-repo" bin="$TEST_ROOT/sync-bin"
   copy_built_project "$project"
@@ -486,6 +518,7 @@ run_test 'survey survives a symlinked directory' test_survey_survives_a_symlinke
 run_test 'survey stays out of Git' test_survey_is_written_under_gitignored_runtime
 run_test --fast 'graph route only when the index is usable' test_graph_route_is_taken_only_when_the_index_is_usable
 run_test --fast 'graph route refused for a shell project' test_graph_route_is_refused_for_a_shell_project
+run_test --fast 'graph route survives a docs-heavy project' test_graph_route_survives_a_docs_heavy_project
 run_test 'graph sync runs only when the survey rebuilds' test_graph_sync_runs_only_when_the_survey_rebuilds
 run_test 'graph degrades when sync fails' test_graph_degrades_when_sync_fails
 run_test 'graph reports the test glob affected needs' test_graph_reports_the_test_glob_affected_actually_needs

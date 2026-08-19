@@ -255,11 +255,6 @@ x_survey_section_hotspots() {
 # advertised list: only what we would actually route on.
 X_SURVEY_GRAPH_EXTS='ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|cs|php|rb|c|h|cc|cpp|hpp|m|swift|kt|kts|scala|dart|vue|svelte|astro|lua|sol|tf|nix'
 
-# Share of files that must be in a supported language before the graph route is
-# worth taking. Below this the index answers too few questions to be the primary
-# navigation surface.
-X_SURVEY_GRAPH_MIN_SHARE=30
-
 # Hard bound on any codegraph call. A slow graph must never hold up planning:
 # every call site degrades to the file route instead of waiting.
 X_SURVEY_GRAPH_TIMEOUT=120
@@ -276,18 +271,26 @@ x_survey_codegraph() {
   )
 }
 
-# Percentage of in-scope files written in a supported language.
-x_survey_graph_share() {
+# True when the project contains any file in a supported language.
+#
+# Deliberately a presence check, not a proportion. An earlier version required a
+# supported-language *share* of the whole tree, which judged a project by how
+# much of it is not code: a content system with 200 Markdown articles and 40
+# TypeScript files scored 17% and was refused the graph, even though those 40
+# files are precisely what a plan gets written against. The share also never
+# decided anything on real repositories (measured: 62%, 65%, 0%) while carrying
+# that false negative. Whether the graph is useful is answered by the index
+# below, not by the article count.
+x_survey_graph_has_code() {
   x_survey_files | LC_ALL=C tr '\0' '\n' |
     LC_ALL=C awk -v exts="$X_SURVEY_GRAPH_EXTS" '
       BEGIN { n = split(exts, a, "|"); for (i = 1; i <= n; i++) ok[a[i]] = 1 }
       {
-        total++
         name = $0
         sub(/^.*\//, "", name)
-        if (name ~ /\./) { e = name; sub(/^.*\./, "", e); if (e in ok) hit++ }
+        if (name ~ /\./) { e = name; sub(/^.*\./, "", e); if (e in ok) { found = 1; exit } }
       }
-      END { if (total == 0) print 0; else printf "%d\n", (hit * 100) / total }
+      END { exit found ? 0 : 1 }
     '
 }
 
@@ -299,14 +302,14 @@ x_survey_graph_share() {
 # the question `codegraph sync` answers, so reusing it means no second staleness
 # mechanism and no cost at all when nothing changed.
 x_survey_graph_probe() {
-  local do_sync=${1:-0} share symbols
+  local do_sync=${1:-0} symbols
   X_SURVEY_GRAPH_SYMBOLS=0
 
   if ! command -v codegraph >/dev/null 2>&1; then X_SURVEY_GRAPH=absent; X_SURVEY_NAV=files; return 0; fi
 
-  share=$(x_survey_graph_share || true)
-  [[ $share =~ ^[0-9]+$ ]] || share=0
-  if (( share < X_SURVEY_GRAPH_MIN_SHARE )); then
+  # Cheap pre-filter only: skip the tool entirely for a project with no code at
+  # all. It is not a judgement about whether the graph is worth using.
+  if ! x_survey_graph_has_code; then
     X_SURVEY_GRAPH=unsupported; X_SURVEY_NAV=files; return 0
   fi
 

@@ -59,7 +59,7 @@ raw skill 先由 Codex 建置環境專用的 `.codex/skills/canonicalize-skill` 
 
 17. **fingerprint 只對實質變動反應**：planning fingerprint 是為了偵測「規劃輸入的意義改了」。原本對原始位元組雜湊，連 tab、重複空白、多一行空行都會 rotate，把所有已完成的 facet 標成 stale——防呆變成噪音。`x_plan_normalize_body` 在雜湊前做保守正規化（tab 展開、行內連續空白、行尾空白、連續空行），但**保留前導縮排**，因為它承載清單層級，是語意。結論未受影響的 facet 用 `xdh plan facet set --reaffirm` 重新蓋章：它只能平移一個已經記錄過的同類狀態，永遠無法無中生有一個 completed。
 
-18. **關係查詢按專案分類 routing**：「誰呼叫這個 / 改了會影響誰 / 哪些測試會壞」由 CodeGraph 的索引回答，比讀檔案便宜一到兩個數量級——在 `wf-comic` 與 `owlchi-site-system` 上實測，一次 callers 查詢的純文字答案是 0.2–1.3 KB，而含有該符號的檔案總量是 26–243 KB。但 CodeGraph 不支援 shell / Markdown / YAML，skill-x 自己就索引不到東西，所以能力必須是**可選**的：`xdh survey` 一次分類（語言佔比 → 是否已 init → 索引是否非空），輸出 `X_SURVEY_NAV`，技能只讀這個結果。`unsupported` / `empty` / `absent` 都是正常狀態，靜默降級回讀檔路線，不得產生警告噪音。
+18. **關係查詢按專案分類 routing**：「誰呼叫這個 / 改了會影響誰 / 哪些測試會壞」由 CodeGraph 的索引回答，比讀檔案便宜一到兩個數量級——在 `wf-comic` 與 `owlchi-site-system` 上實測，一次 callers 查詢的純文字答案是 0.2–1.3 KB，而含有該符號的檔案總量是 26–243 KB。但 CodeGraph 不支援 shell / Markdown / YAML，skill-x 自己就索引不到東西，所以能力必須是**可選**的：`xdh survey` 一次分類（有沒有程式碼 → 是否已 init → 索引是否非空），輸出 `X_SURVEY_NAV`，技能只讀這個結果。第一關刻意只是「存在性」而非「佔比」：曾經要求支援語言達到一定佔比，那等於用「這個 repo 有多少不是程式碼」來判斷圖有沒有用——一個 200 篇 markdown + 40 個 TS 檔的內容系統只有 17%，會被拒絕走圖，但那 40 個檔正是規劃的對象。而且佔比在真實 repo 上（62% / 65% / 0%）從未真正做過決定，卻帶著那個誤判。「圖夠不夠用」由索引裡有沒有符號回答。`unsupported` / `empty` / `absent` 都是正常狀態，靜默降級回讀檔路線，不得產生警告噪音。
 
     三個實測發現寫進了技能文字，因為官方文件沒有講：(a) `--json` 的輸出約是純文字的兩倍而事實相同，agent 該用純文字；(b) `codegraph affected` 的預設 glob 只認 `*.test.*` / `*.spec.*`，Python 的 `test_*.py` 會回「No test files affected」——與真正的空結果無法區分，所以 survey 從專案的測試命名推導出 glob 並寫進 `## Code graph`，而且 `affected` 只能當**正面訊號**（它走 import 邊，Playwright 那種跑瀏覽器的套件連不到）；(c) CLI 預設開啟 telemetry，跑在私有 repo 上一律 `CODEGRAPH_TELEMETRY=0`。
 
