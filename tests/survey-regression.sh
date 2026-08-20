@@ -101,36 +101,54 @@ test_survey_emits_every_key_within_budget() {
   return 0
 }
 
+# Every step reports expected-vs-actual on failure, plus the survey's own stderr
+# and the git state the cache key is derived from. A bare `[[ ]]` here once made
+# a CI failure unreadable: the log said only `FAIL (1.72s)`, with no way to tell
+# which step broke or what it actually saw.
+_cache_step() {
+  local label=$1 want=$2 repo=$3 xdh=$4 out=$5
+  shift 5
+  ( cd "$repo" && "$xdh" survey ensure "$@" ) > "$out" 2> "$out.err" || true
+  local got
+  got=$(survey_kv "$out" X_SURVEY_STATE)
+  [[ $got == "$want" ]] && return 0
+  {
+    echo "cache step '$label': expected X_SURVEY_STATE=$want, got '${got:-<empty>}'"
+    echo "--- xdh stdout ---"; cat "$out"
+    echo "--- xdh stderr ---"; cat "$out.err"
+    echo "--- git status --porcelain ---"; git -C "$repo" status --porcelain
+    echo "--- git HEAD ---"; git -C "$repo" rev-parse HEAD
+    echo "--- stored key ---"
+    cat "$repo/.dev-hub/runtime/survey/survey.key" 2>/dev/null || echo "(none)"
+    echo
+  } >&2
+  return 1
+}
+
 test_survey_is_cached_until_the_tree_moves() {
   local project="$TEST_ROOT/cache" repo="$TEST_ROOT/cache-repo"
   make_survey_fixture "$project" "$repo"
   local XDH="$project/commands/x-discovery/scripts/xdh"
 
-  ( cd "$repo" && "$XDH" survey ensure ) > "$project/first"
-  [[ $(survey_kv "$project/first" X_SURVEY_STATE) == rebuilt ]]
+  _cache_step 'first build' rebuilt "$repo" "$XDH" "$project/first" || return 1
 
   # Nothing changed: the second caller pays a read, not a rebuild. This is what
   # lets x-discovery and x-plan-eng both call ensure unconditionally.
-  ( cd "$repo" && "$XDH" survey ensure ) > "$project/second"
-  [[ $(survey_kv "$project/second" X_SURVEY_STATE) == fresh ]]
+  _cache_step 'unchanged tree' fresh "$repo" "$XDH" "$project/second" || return 1
 
   # An uncommitted edit invalidates: the key includes `git status --porcelain`.
   printf 'export const b = 2\n' >> "$repo/src/lib.js"
-  ( cd "$repo" && "$XDH" survey ensure ) > "$project/dirty"
-  [[ $(survey_kv "$project/dirty" X_SURVEY_STATE) == rebuilt ]]
-  ( cd "$repo" && "$XDH" survey ensure ) > "$project/dirty2"
-  [[ $(survey_kv "$project/dirty2" X_SURVEY_STATE) == fresh ]]
+  _cache_step 'after edit' rebuilt "$repo" "$XDH" "$project/dirty" || return 1
+  _cache_step 'edit settled' fresh "$repo" "$XDH" "$project/dirty2" || return 1
 
   # Committing moves HEAD, so it invalidates again even though the working tree
   # is now clean and the porcelain digest returns to its original value.
-  git -C "$repo" add -A
+  git -C "$repo" add src tests
   git -C "$repo" commit -qm second
-  ( cd "$repo" && "$XDH" survey ensure ) > "$project/committed"
-  [[ $(survey_kv "$project/committed" X_SURVEY_STATE) == rebuilt ]]
+  _cache_step 'after commit' rebuilt "$repo" "$XDH" "$project/committed" || return 1
 
   # --force rebuilds a valid cache on demand.
-  ( cd "$repo" && "$XDH" survey ensure --force ) > "$project/forced"
-  [[ $(survey_kv "$project/forced" X_SURVEY_STATE) == rebuilt ]]
+  _cache_step 'forced' rebuilt "$repo" "$XDH" "$project/forced" --force || return 1
 }
 
 test_survey_path_reports_without_building() {

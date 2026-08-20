@@ -43,8 +43,13 @@ x_survey_key() {
   # not run `xdh init` the directory is merely untracked, so writing the survey
   # into it changes `git status` and the cache key would invalidate itself on
   # every single call.
+  # `grep -v` exits 1 when every line was filtered out, which is the ordinary
+  # case: a clean tree, or one whose only change is .dev-hub itself. Today that
+  # status is swallowed because `key=$(x_survey_key)` suppresses errexit inside
+  # the substitution — an accident, not a design. A direct call to this function
+  # dies on a clean repository, so make the empty case explicit.
   porcelain=$(git status --porcelain 2>/dev/null |
-    LC_ALL=C grep -v '\.dev-hub/' | x_survey_sha)
+    { LC_ALL=C grep -v '\.dev-hub/' || true; } | x_survey_sha)
   printf 'schema=%s\nhead=%s\nporcelain=%s\n' "$X_SURVEY_SCHEMA" "$head" "$porcelain"
 }
 
