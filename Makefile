@@ -15,5 +15,6 @@ test-full:
 	bash ./tests/plan-machine-regression.sh
 	bash ./tests/plan-content-regression.sh
 	bash ./tests/survey-regression.sh
+	bash ./tests/survey-cache-regression.sh
 	bash ./tests/pr10-safety-regression.sh
 	bash ./tests/pr15-regression.sh
