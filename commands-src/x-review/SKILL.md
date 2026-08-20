@@ -59,17 +59,34 @@ Record the base/head or equivalent reviewed range instead.
 Prefer a fresh read-only Codex CLI child; fall back once to a fresh independent
 host subagent. Do not retry a failed reviewer path repeatedly.
 
-A CLI reviewer must be bounded by a timeout and run read-only. Use
-`codex review --base <base>` when its default branch review matches the required
-scope; use `codex exec --sandbox read-only --ephemeral` when the prompt must
-strictly constrain quick scope or perform a focused full review.
+### Dispatch invariants
 
-When the review target includes uncommitted changes, pass `--uncommitted` so the
-independent reviewer sees the same working content being shipped. Review depth
-still controls how far the reviewer explores; it must never omit part of the
-actual target merely to keep a quick review cheap.
+Keep reviewer startup deterministic without making review scope broad:
 
-The review prompt must name the depth and enforce its scope:
+- require a bounded timeout; use `timeout`, or `gtimeout` on macOS;
+- check only whether Codex auth exists — `OPENAI_API_KEY` or Codex `auth.json` —
+  and never print credentials;
+- branch-diff review uses `codex review --base <base>`;
+- when the target includes uncommitted changes, add `--uncommitted` so the
+  reviewer sees the actual working content;
+- constrained/focused review uses
+  `codex exec --sandbox read-only --ephemeral`; never use a write-capable
+  sandbox or approval bypass.
+
+Review depth controls **exploration**, not target completeness: quick mode may
+read less surrounding code, but it may not silently omit changed content.
+
+Record reviewer provenance when creating an RV artifact:
+
+```bash
+"$XDH" artifact new --kind RV --target "<target>" --base <base> \
+  --implementer "<agent-id>" --reviewer "<reviewer-id>" \
+  --reviewer-type "<codex-cli|host-subagent>" \
+  --reviewer-model "<model>" --review-mode "<quick|full>" \
+  --independent yes
+```
+
+The review prompt must name the depth and enforce its scope.
 
 ### Quick prompt contract
 
@@ -157,9 +174,9 @@ resolve.
 
 #### Full re-review
 
-Any reviewed-content change invalidates a full fingerprint-bound approval.
-Recompute the fingerprint and perform a fresh full independent review of the
-final content.
+Any reviewed-content change invalidates a full fingerprint-bound approval. After
+fixes, recompute the fingerprint and perform a fresh full independent review of
+the final content.
 
 ## Verdicts
 
