@@ -72,6 +72,14 @@ build_canonical_skills() {
     awk -v header="$HEADER" '
       { sub(/\r$/, "") }
       NR == 1 && $0 != "---" { exit 42 }
+      # `## Provenance` records where a skill came from. That is maintenance
+      # history for the repository, not instruction for the agent that loads
+      # the deployed artifact, so it stays in commands-src/ and is stripped
+      # here. Skipping runs to the next H2 rather than to EOF so the section
+      # is not required to be last.
+      /^## Provenance[ \t]*$/ { skipping = 1; next }
+      skipping && /^## / { skipping = 0 }
+      skipping { next }
       { print }
       NR > 1 && $0 == "---" && !done {
         print ""

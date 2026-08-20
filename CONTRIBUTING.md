@@ -100,7 +100,7 @@ bin/build.sh
 | 指令 | 內容 | 什麼時候用 |
 |---|---|---|
 | `make test`（等同 `make test-fast`） | `tests/run.sh --fast`：canonical build、header 注入、OpenCode shim 產生、共用資產 materialize、artifact gitignore 檢查、sync 冒煙測試、harness timeout 自檢 | **低風險改動**：只動 `commands-src/**/SKILL.md`、技能的支援檔、`_shared/update-check-header.md`、文件 |
-| `make test-full` | `tests/run.sh --full` + `tests/plan-machine-regression.sh` + `tests/plan-content-regression.sh` + `tests/pr10-safety-regression.sh` + `tests/pr15-regression.sh`，執行所有已註冊測試 | **其餘一律用這個**：動到 `bin/`（含 `bin/targets/`）、`tests/`、`install.sh`、`Makefile`，或任何影響 install/sync/update/uninstall 生命週期、Git 更新檢查、cloud bootstrap、target adapter、`xdh` 行為的改動 |
+| `make test-full` | `tests/run.sh --full` + `tests/plan-machine-regression.sh` + `tests/plan-content-regression.sh` + `tests/survey-regression.sh` + `tests/pr10-safety-regression.sh` + `tests/pr15-regression.sh`，執行所有已註冊測試 | **其餘一律用這個**：動到 `bin/`（含 `bin/targets/`）、`tests/`、`install.sh`、`Makefile`，或任何影響 install/sync/update/uninstall 生命週期、Git 更新檢查、cloud bootstrap、target adapter、`xdh` 行為的改動 |
 
 不確定就跑 `make test-full`——它才是送出前的完整把關。
 

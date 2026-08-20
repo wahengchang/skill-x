@@ -59,10 +59,30 @@ selection before starting so the Owner can interrupt.
 
 ### 2. Read the repository first
 
-Confirm the current state before proposing a change: existing patterns,
-interfaces, schemas, migrations, configuration, and the tests that already
-cover the area. Cite `file:line`. A question the code answers is never an Owner
-question, and a plan that contradicts the code is worse than no plan.
+Start from the shared survey, not from a fresh scan:
+
+```bash
+"$XDH" survey ensure
+```
+
+`X_SURVEY_FILE` is the same bounded snapshot `x-discovery` uses — layout, entry
+points, docs, tests, DevEx commands, change hotspots. When discovery already ran
+in this repository the file is still valid (`X_SURVEY_STATE=fresh`) and costs one
+read; the command rebuilds only when the commit or the working tree moved.
+
+Then confirm the current state **of the area this item touches** — existing
+patterns, interfaces, schemas, migrations, configuration, and the tests that
+already cover it. Cite `file:line`. A question the code answers is never an
+Owner question, and a plan that contradicts the code is worse than no plan.
+
+When `X_SURVEY_NAV=graph`, ask the index for relationships instead of reading
+files to infer them — the survey's `## Code graph` section carries the commands.
+Those answers tell you which few files are worth opening; they do not replace
+reading the code you are about to change.
+
+Read the area, not the project. The survey is what tells you where the area is;
+re-walking the whole tree here is duplicated work, because discovery already did
+it and its conclusions are in `hub.md`.
 
 Also challenge the scope before defining it:
 
@@ -151,6 +171,21 @@ fingerprinted sections from step 4:
 - **Definition of Ready** — every box ticked before `plan check`, except
   `Owner/WG/branch/worktree`, which the WG step satisfies.
 
+On the `graph` route, three of those have a mechanical source. Use it — a
+guessed blast radius is the most expensive kind of wrong:
+
+| Section | Ask |
+|---|---|
+| Interfaces / dependencies | `codegraph callees <symbol>`, `codegraph node <symbol>` for the exact signature |
+| Failure modes / risks | `codegraph impact <symbol> -d 2` — the real reachable set |
+| Tests | `codegraph affected <changed files> -f "<glob>"`, glob from the survey |
+
+`affected` is a **positive signal only**. It follows import edges, so it finds
+tests that import the code and returns nothing for suites that exercise it
+through a browser or a subprocess — and it returns that emptiness silently,
+reading exactly like "no tests are affected". Never let an empty result stand as
+evidence that no test is needed.
+
 The reasoning itself — why this architecture, what was rejected, which
 `file:line` the current behavior came from — goes in `## Engineering Facet`,
 which step 6 records as the facet's evidence.
@@ -192,10 +227,17 @@ with its branch checked out. `status=worktree-unregistered` or
 — repair the worktree, do not edit the WG document to match.
 
 If the fingerprint rotated between step 4 and here, `plan check` reports
-`facet=engineering status=stale`. Re-read the fingerprint, re-record the facet
-at the new value, and carry any accepted Owner Decision forward under a fresh OD
-ID — an accepted row cannot be moved to a new fingerprint
-(`decision=<id> status=id-collision`).
+`facet=engineering status=stale`. Re-read the fingerprint and re-record the
+facet at the new value. When the edit that rotated it does not change the
+engineering conclusion — confirm that by re-reading `## Engineering Facet`, not
+by assuming it — re-stamp in one command instead of re-deriving:
+
+```bash
+"$XDH" plan facet set <item> --facet engineering --status completed --reaffirm
+```
+
+Carry any accepted Owner Decision forward under a fresh OD ID — an accepted row
+cannot be moved to a new fingerprint (`decision=<id> status=id-collision`).
 
 ### 8. Write back and check consistency
 

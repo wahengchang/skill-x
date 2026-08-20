@@ -412,12 +412,13 @@ test_build_materializes_shared_skill_assets() {
   [[ ! -e "$project/commands/_x-shared" ]]
   [[ ! -e "$project/opencode-commands/_x-shared.md" ]]
 
-  # Facet contracts are materialized as real self-contained copies in x-plan and
-  # in every specialist that owns one, from the single shared canonical source.
+  # x-plan carries a dispatch table, not the contracts: the orchestrator does
+  # not need a facet's contract to dispatch it, and bundling both put the same
+  # content into an agent's context twice per plan.
+  [[ -f "$project/commands/x-plan/references/facet-dispatch.md" ]]
   local facet
   for facet in product design devex engineering; do
-    [[ -f "$project/commands/x-plan/references/$facet-facet-contract.md" ]]
-    [[ ! -L "$project/commands/x-plan/references/$facet-facet-contract.md" ]]
+    [[ ! -e "$project/commands/x-plan/references/$facet-facet-contract.md" ]]
   done
   local specialist
   for specialist in x-plan-eng x-plan-product x-plan-design x-plan-devex; do

@@ -74,30 +74,44 @@ Every `<item>` below is the **path** the creating command reported as
 `X_ITEM_FILE`, never the bare `IS-001`. The planning commands take a file inside
 `.dev-hub/` and reject anything else.
 
-## Facet contracts
+## Facet dispatch
 
-`x-plan` reads each facet contract **only** from its own bundled references, and
-never from a sibling skill path or a specialist's Direct workflow:
+`references/facet-dispatch.md` is what the orchestrator reads: which skill owns
+each facet, what it is allowed to write, what to hand it, and what to check when
+it returns. Read it **only** from this skill's own bundled references, never
+from a sibling skill path.
 
-- `references/product-facet-contract.md`
-- `references/design-facet-contract.md`
-- `references/devex-facet-contract.md`
-- `references/engineering-facet-contract.md`
-
-When dispatching a specialist, hand it the contract that belongs to its facet.
-The running specialist then reads its own `references/facet-contract.md` — the
-same canonical file, bundled separately.
+Do not read the facet contracts here. Each specialist bundles its own at
+`references/facet-contract.md` and reads it when it runs; the orchestrator
+reading them as well loaded the same content into context twice without
+informing any decision the orchestrator makes.
 
 ## Required workflow
 
 ### 1. Resolve scope, target, and route
 
-Resolve the scope and target with the ladder above. Then determine the route:
-the ordered union of the applicable facets plus Engineering. The canonical form
-is lowercase, comma-separated, with Engineering mandatory and last, in the order
-`product,design,devex,engineering` (drop the facets that do not apply, never
-Engineering). Record per-item not-applicable facets so the plan is honest about
-what was skipped.
+Resolve the scope and target with the ladder above. Then determine the route.
+
+**The default route is `engineering` alone.** Product, Design, and DevEx enter
+the route only when one of these is true:
+
+- the user asked for that facet in this invocation; or
+- the `hub.md` work row for this item marks that facet as needed.
+
+Nothing else opens a facet — not the topic sounding product-shaped, not a
+judgement that the work "would benefit from" design input. If you believe a
+facet is genuinely required and neither trigger fired, say so and ask; do not
+add it silently. The canonical form stays lowercase, comma-separated, with
+Engineering mandatory and last, in the order `product,design,devex,engineering`.
+Record per-item not-applicable facets so the plan is honest about what was
+skipped.
+
+When the resolved route is `engineering` alone — the ordinary case — **hand the
+item to `x-plan-eng` Direct mode and stop orchestrating.** Direct mode runs the
+identical machine sequence (`plan check` → `wg new --items` → `plan ready`) with
+Product, Design, and DevEx `not-applicable`. Dispatching a single facet through
+the orchestration layer adds a fingerprint hand-off and a second contract read
+for no gain, so do not do it.
 
 A Spike is always route `engineering` alone. The machine layer enforces it —
 any other route on an `SP` document fails every planning command with
@@ -153,60 +167,17 @@ rotates the fingerprint and stales everything anchored to the old value. See
 
 ### 4. Dispatch the facets in order
 
-Invoke the specialist skills sequentially, one facet at a time:
+Only on a multi-facet route; the engineering-only route left for `x-plan-eng` at
+step 1. Read `references/facet-dispatch.md` now and follow its dispatch section:
+it carries the order, what to hand each specialist, what to verify on return,
+and how Owner Decision rows are opened.
 
 ```text
 Product? → Design? → DevEx? → Engineering (required)
 ```
 
-`x-plan` itself performs no facet work. Each specialist records its own status
-through its sole Facet-mode writer. Hand each one the same four things: the
-item's file path, its facet name, the matching contract from `references/`, and
-the current fingerprint it must anchor to. A specialist that has to guess the
-fingerprint will guess a stale one.
-
-Re-read the fingerprint before each dispatch, and when a specialist returns,
-check that it wrote only its own field, evidence, and section, and that any
-completion is bound to the fingerprint you just read. Never carry a stale
-completion forward because the prose still looks right.
-
-Batch homogeneous Owner decisions into one brief; split genuinely different
-questions into separate groups. A question limit is not a licence to guess: it
-must never silently apply a default to a facet decision.
-
-Owner Decisions live in one ID-keyed table and move in one direction. A pending
-row carries the **recommended** answer in its `Decision` cell and `—` as its
-fingerprint; the accepted row carries the Owner's answer and the fingerprint it
-was accepted at. Open the row and record the answer through the same writer,
-using the same OD ID — never edit the table with a generic text rewrite:
-
-```bash
-"$XDH" plan decision set <item> --id OD-001 --facet <facet> \
-  --question "<question>" --decision "<recommendation>" --state pending
-"$XDH" plan decision set <item> --id OD-001 --facet <facet> \
-  --question "<question>" --decision "<owner answer>" --state accepted@<fp>
-```
-
-Only `product` may open its own row, atomically with its blocked status. For
-design, devex, and engineering the specialist reports the question and blocks;
-the orchestrator opens the row.
-
-If the Owner's answer changes a fingerprinted input, apply the canonical edit
-**before** recording the acceptance: the pending row survives the edit — its
-fingerprint cell is `—` — so the pending → accepted transition then lands on the
-new fingerprint in one move, and the affected facets are re-run from the
-earliest one touched. Accepting first and editing after is what strands a row
-(see *Re-anchoring*).
-
-A facet that ends `deferred-owner@<fp>` or `deferred-missing@<fp>` needs an
-accepted decision **carrying that same facet name** at that same fingerprint,
-otherwise `plan check` rejects it as `facet=<f> status=deferred-unaccepted`.
-"Ship without the design facet?" is a design row, not a product one, however
-product-shaped the question feels. `deferred-owner` is an Owner-sanctioned skip;
-`deferred-missing` is for a specialist that cannot run on this host at all —
-never for a capability missing *inside* a specialist, which downgrades its
-method rather than its status. Never synthesize the missing specialist's
-reasoning yourself.
+`x-plan` itself performs no facet work. Re-read the fingerprint before each
+dispatch — a specialist that has to guess it will guess a stale one.
 
 ### 5. Check the plan
 
@@ -265,26 +236,14 @@ with the formal item, Owner, WG, and status.
 
 A shared section edited after a facet completed shows up at the next check as
 `BLOCKER facet=<f> status=stale expected=<new> actual=completed@<old>`. Never
-force past it; re-anchor deliberately:
+force past it. `references/facet-dispatch.md` holds the re-anchoring procedure,
+including `--reaffirm` for a conclusion the edit did not change, and the one
+trap that has no cheap way back: an **already accepted** Owner Decision cannot
+be moved to a new fingerprint.
 
-1. Re-read the fingerprint with `plan fingerprint` and take the new value.
-2. Re-run the affected facets, starting from the earliest one the change
-   touches, and let each re-record itself at the new fingerprint. A facet whose
-   reasoning genuinely did not change is still re-recorded, never restamped by
-   hand.
-3. Decisions still `pending` come along for free — their fingerprint cell is
-   `—`, so accepting them now lands on the new value.
-
-Only step 3 can trap you. An **already accepted** decision cannot be moved: the
-writer permits pending → accepted and nothing else, so re-accepting the same OD
-ID at a new fingerprint fails with `decision=<id> status=id-collision`. Carry
-that answer forward under a fresh OD ID, starting from a pending row. With
-`product` in the route this is not optional — `plan check` rejects a stale
-accepted product row outright (`state=stale-product re-anchor-required`).
-
-Both traps have the same cheap avoidance, and it is worth the discipline:
-settle the shared sections before the first dispatch, and when an Owner decision
-changes one of them, edit first and accept second.
+The cheap avoidance is worth the discipline: settle the shared sections before
+the first dispatch, and when an Owner decision changes one of them, edit first
+and accept second.
 
 ## Owner questions
 
