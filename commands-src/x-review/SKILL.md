@@ -217,6 +217,33 @@ Only `full` review records the approved fingerprint on the WG document:
 - Target: <WG-XXX / PR / branch>
 ```
 
+## Continuing
+
+Handover is a protocol carried by the artifacts, not a runtime. The stage order
+is:
+
+```text
+Discovery → Planning → Implementation / Spike Execution
+  → Review when risk requires it → Debug (when needed) → Re-review when needed
+  → Ship → Housekeeping (after merge)
+```
+
+When the user says `continue`, resolve the target in this order:
+
+1. a Cycle, work item, WG, PR, or branch named explicitly in the conversation;
+2. the `Next` line of the handover that was just written;
+3. the stage and status recorded on the current WG document;
+4. the only active WG, when there is exactly one;
+5. otherwise the highest-priority `ready` WG that has not started.
+
+Ask only when several targets remain plausible after all five, and ask once.
+
+Automatic continuation stops for exactly these reasons: an Owner-only scope,
+product, or priority call; a destructive or irreversible action that cannot be
+judged safe; a merge conflict or test failure; a review needing non-mechanical
+fixes; a root cause that evidence cannot confirm; a target that the artifacts
+cannot disambiguate.
+
 ## Provenance
 
 Keeps gstack-inspired outside-voice independent review and cross-model reviewer
