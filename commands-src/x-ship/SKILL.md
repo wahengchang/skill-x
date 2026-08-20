@@ -48,8 +48,8 @@ failure cost, never line count alone**:
 | Class | Use when | Extra gates beyond the common path |
 | --- | --- | --- |
 | `light` | Narrow, local, reversible change with no sensitive/public contract surface | None |
-| `standard` | Ordinary behavioral code change with a bounded blast radius | One focused independent review |
-| `guarded` | Security/data/public-contract/release/concurrency/architecture risk, uncertain blast radius, or policy requires strict review | Full docs audit + fingerprint-bound independent review + freeze/re-review |
+| `standard` | Ordinary behavioral code change with a bounded blast radius | `x-review --quick` |
+| `guarded` | Security/data/public-contract/release/concurrency/architecture risk, uncertain blast radius, or policy requires strict review | docs blast-radius audit + `x-review --full` + fingerprint/freeze |
 
 Guard triggers include auth/permissions/secrets, payments, destructive or
 persistent-data changes, schema/migrations/serialization compatibility, public
@@ -112,13 +112,30 @@ higher class.
 
 ### `standard`
 
-Run one focused independent `x-review` against the current diff. The reviewer
-must still be independent, but standard shipping does not require a separate
-full documentation blast-radius audit or a fingerprint freeze ceremony.
+Dispatch **`x-review --quick`**.
 
-If the review requests code changes, fix them, re-run the full suite for the new
-code/test tree, and re-review the changed content. If the review reveals a guard
-trigger, promote to `guarded`.
+Quick review is intentionally bounded: it reviews the changed files/hunks and
+only the direct consumers needed to verify concrete correctness or regression
+claims. It must not silently expand into a repository-wide audit or sweep every
+review category.
+
+If quick review reports `ESCALATE_FULL`, promote the ship to `guarded` and run
+the guarded path. Do not keep broadening quick review until it costs the same as
+full review.
+
+If quick review requests ordinary local fixes:
+
+1. apply the fixes;
+2. re-run the full standard test suite because code/test content changed;
+3. ask `x-review --quick` for **delta re-review** of the fixes plus their direct
+   regression surface.
+
+Do not restart review from the entire PR merely because a few bounded findings
+were fixed. Re-review the whole final content only after promotion to `guarded`,
+or when the fix itself broadens the contract/blast radius enough to require it.
+
+Standard shipping does not require a separate repository-wide documentation
+audit, fingerprint ceremony, or final-content freeze.
 
 ### `guarded`
 
@@ -127,15 +144,19 @@ Use the strict final-content path:
 1. audit documentation across the real blast radius and finish factual docs
    before review;
 2. fingerprint the complete working state;
-3. require a fresh independent `x-review` approval bound to that fingerprint;
+3. dispatch **`x-review --full`** and require fresh independent approval bound to
+   that fingerprint;
 4. freeze reviewed content after approval;
 5. run only non-modifying final checks;
 6. if reviewed content changes, the approval is stale — re-run the required
-   verification and independent review.
+   verification and full independent review.
 
 ```bash
 "$XDH" fingerprint --base <base>
 ```
+
+Full review may read the complete diff, relevant outside-diff consumers, and the
+full review checklist because guarded risk justifies that cost.
 
 If no fresh independent reviewer can be obtained, guarded shipping is
 `BLOCKED`. Never downgrade a guarded change merely to get the PR open.
@@ -165,7 +186,8 @@ Keep the PR body proportional too. Include at least:
 - Ship class + classification reason
 - Tests
 - Documentation impact
-- Review (`not required for light`, reviewer result for standard/guarded)
+- Review (`not required for light`, quick result for standard, full result +
+  fingerprint for guarded)
 - Remaining risks, if any
 
 If no PR provider is available, push the branch and report the exact branch and
@@ -188,9 +210,10 @@ artifacts are not a blocker for standalone branch shipping.
 - merge conflict cannot be resolved unambiguously;
 - full standard test suite fails because of this branch;
 - required acceptance criteria fail;
-- `standard` or `guarded` independent review returns `CHANGES_REQUESTED` and the
-  fix is non-mechanical or unresolved;
-- `guarded` has no fresh independent reviewer;
+- quick review returns unresolved `CHANGES_REQUESTED` or `ESCALATE_FULL` and the
+  guarded path cannot complete;
+- guarded full review returns `CHANGES_REQUESTED`;
+- guarded has no fresh independent reviewer;
 - destructive or irreversible decision needs Owner input;
 - required credential or remote is missing.
 
@@ -205,9 +228,14 @@ the full standard test suite. Then it reruns only the gates required by the
 current class. Actions remain idempotent: reuse the branch, update the existing
 PR, and do not duplicate already-published state.
 
+Within one invocation, reuse unchanged expensive evidence. Quick re-review is
+scoped to the fix delta; full re-review is scoped to the complete final content
+because fingerprint-bound approval requires it.
+
 Risk can only stay the same or increase during a run. If new evidence promotes a
-change, continue with the higher-class gates rather than restarting from zero;
-reuse results only while the relevant tree/content is unchanged.
+change, continue with the higher-class gates rather than restarting unrelated
+completed work; reuse test results only while the relevant code/test tree is
+unchanged.
 
 ## Handover
 
@@ -216,7 +244,7 @@ reuse results only while the relevant tree/content is unchanged.
 
 - Current state: pr-open | blocked
 - Ship class: light | standard | guarded — <reason>
-- Completed: <tests, review if required, commits, push, PR URL, docs impact>
+- Completed: <tests, review depth/result if required, commits, push, PR URL, docs impact>
 - Blockers: none | <items>
 - Owner decision: none | <question>
 - Next: await merge, then x-housekeeping
@@ -249,5 +277,5 @@ Ask only when several targets remain plausible after all five, and ask once.
 Keeps the automated final-mile and PR create-or-update behavior adapted from
 gstack `ship`, while changing the local policy from one mandatory release-grade
 path to risk-adaptive gates. The guarded path preserves final-content review and
-documentation discipline; light and standard paths use progressive disclosure
-so small safe changes do not pay for every expensive gate.
+documentation discipline; standard now uses a genuinely bounded quick review and
+delta re-review so ordinary work does not inherit full-review cost.
