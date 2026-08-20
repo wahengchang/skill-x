@@ -64,6 +64,11 @@ A CLI reviewer must be bounded by a timeout and run read-only. Use
 scope; use `codex exec --sandbox read-only --ephemeral` when the prompt must
 strictly constrain quick scope or perform a focused full review.
 
+When the review target includes uncommitted changes, pass `--uncommitted` so the
+independent reviewer sees the same working content being shipped. Review depth
+still controls how far the reviewer explores; it must never omit part of the
+actual target merely to keep a quick review cheap.
+
 The review prompt must name the depth and enforce its scope:
 
 ### Quick prompt contract
