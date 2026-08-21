@@ -1,6 +1,6 @@
 ---
 name: q-plan
-description: Clarify an engineering request only as much as needed to reach shared understanding, classify it as micro, scoped, or complex, record the agreed understanding in one local build-plan.md, and route to the matching q-plan-* skill.
+description: Clarify an engineering request only as much as needed to reach shared understanding, classify it as micro, scoped, or complex, record the agreed understanding in one local hub.md, and route to the matching q-plan-* skill.
 ---
 
 # q-plan
@@ -51,22 +51,22 @@ Active planning state is local execution state, not repository history.
 Use:
 
 ```text
-.dev-hub/active/<slug>/build-plan.md
+.dev-hub/active/<slug>/hub.md
 ```
 
 Rules:
 
 - one active work scope per directory;
-- exactly one `build-plan.md` is the source of truth for that scope;
+- exactly one `hub.md` is the source of truth for that scope;
 - multiple active scopes may coexist;
 - ensure `.dev-hub/active/` is ignored by the target repository's `.gitignore`;
 - do not create Cycle, WG, Issue, Spike, facet, fingerprint, or runtime artifact files;
-- reuse an existing active plan for the same scope instead of creating a duplicate.
+- reuse an existing active hub for the same scope instead of creating a duplicate.
 
 Create or update only this minimal header before routing:
 
 ```markdown
-# Build Plan — <title>
+# Hub — <title>
 
 - Status: planning
 - Complexity: <micro|scoped|complex>
@@ -111,6 +111,6 @@ After classification:
 - `scoped` → invoke `q-plan-scoped`
 - `complex` → invoke `q-plan-complex`
 
-Pass the path to `build-plan.md` and the original request. The routed skill owns the actual plan.
+Pass the path to `hub.md` and the original request. The routed skill owns the actual plan.
 
 If later repository evidence proves the lane wrong, the routed skill may promote or demote once, update `Complexity` and `Route`, and continue under the correct q-plan skill. Do not keep bouncing between lanes.
