@@ -1,6 +1,6 @@
 ---
 name: q-plan-complex
-description: Produce a deep but lean implementation plan for work already classified as complex by q-plan; resolve architecture and risk through repository evidence, compare real options when needed, and express execution as milestones and increments in the single build-plan.md.
+description: Produce a deep but lean implementation plan for work already classified as complex by q-plan; resolve architecture and risk through repository evidence, compare real options when needed, and express execution as milestones and increments in the single hub.md.
 ---
 
 # q-plan-complex
@@ -9,10 +9,10 @@ Plan complex work deeply enough to reduce implementation risk, while keeping one
 
 ## Inputs
 
-Receive the original request and the active plan path from `q-plan`:
+Receive the original request and the active hub path from `q-plan`:
 
 ```text
-.dev-hub/active/<slug>/build-plan.md
+.dev-hub/active/<slug>/hub.md
 ```
 
 `## Understanding` is the agreed work. Do not reopen settled product questions without new evidence.
@@ -37,7 +37,7 @@ When several approaches are genuinely plausible, compare only the realistic opti
 
 Make technical decisions from evidence. Do not ask the user to choose libraries, file layouts, patterns, or algorithms that the repository can decide.
 
-If investigation reveals a missing user-level decision that changes what should be built, stop planning and hand back to `q-plan` with one focused question and a recommended answer. After alignment, resume against the same `build-plan.md`.
+If investigation reveals a missing user-level decision that changes what should be built, stop planning and hand back to `q-plan` with one focused question and a recommended answer. After alignment, resume against the same `hub.md`.
 
 ### 3. Re-check complexity
 
@@ -51,7 +51,7 @@ Prefer vertical, testable increments when the system allows them. Order work by 
 
 ## Output
 
-Update the same `build-plan.md`; create no additional planning documents.
+Update the same `hub.md`; create no additional planning documents.
 
 A useful complex plan normally contains:
 
@@ -100,4 +100,4 @@ Goal: <observable outcome>
 
 Do not pre-write production code or full test bodies. Do not decompose every five-minute action. The plan should constrain correctness and sequencing while leaving ordinary engineering judgement to the implementer.
 
-No Cycle, WG, Issue, Spike, facet, fingerprint, owner-state, or separate decision artifact is required. `build-plan.md` is the planning state.
+No Cycle, WG, Issue, Spike, facet, fingerprint, owner-state, or separate decision artifact is required. `hub.md` is the planning state.
