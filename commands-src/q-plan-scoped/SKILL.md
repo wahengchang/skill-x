@@ -9,10 +9,10 @@ Plan a bounded change to executable depth without expanding into a full design p
 
 ## Inputs
 
-Receive the original request and the active plan path from `q-plan`:
+Receive the original request and the active hub path from `q-plan`:
 
 ```text
-.dev-hub/active/<slug>/build-plan.md
+.dev-hub/active/<slug>/hub.md
 ```
 
 `## Understanding` is the agreed scope.
@@ -29,7 +29,7 @@ Do not interview the user. If repository investigation reveals that the agreed r
 
 ## Output
 
-Update the same `build-plan.md`; create no other planning artifact.
+Update the same `hub.md`; create no other planning artifact.
 
 Use this shape only as far as useful:
 
