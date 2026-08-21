@@ -9,10 +9,10 @@ Plan a micro change quickly. Do not turn an obvious local change into a design e
 
 ## Inputs
 
-Receive the original request and the active plan path from `q-plan`:
+Receive the original request and the active hub path from `q-plan`:
 
 ```text
-.dev-hub/active/<slug>/build-plan.md
+.dev-hub/active/<slug>/hub.md
 ```
 
 The `## Understanding` section is the agreed scope. Treat it as authoritative unless repository evidence proves the classification wrong.
@@ -29,7 +29,7 @@ Do not interview the user. If the requirement itself is no longer understood, ha
 
 ## Output
 
-Update the same `build-plan.md`; create no other planning artifact.
+Update the same `hub.md`; create no other planning artifact.
 
 Keep it compact:
 
