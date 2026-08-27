@@ -15,7 +15,7 @@ ln -s "$TMP/foreign" "$HOME/.claude/skills/user-skill"
 printf '# skill-x-managed-command\n' > "$HOME/.config/opencode/commands/old.md"
 printf '# user command\n' > "$HOME/.config/opencode/commands/user.md"
 
-"$ROOT/bin/skill-x" uninstall --yes >/dev/null
+bash "$ROOT/uninstall.sh" --yes >/dev/null
 
 [[ ! -L "$HOME/.claude/skills/retired-skill" ]]
 [[ ! -L "$HOME/.codex/skills/old-codex-skill" ]]
