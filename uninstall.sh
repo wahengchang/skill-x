@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-CLI="$ROOT/bin/skill-x"
+CLI="$ROOT/bin/skill-x-core"
 # shellcheck source=bin/lib/common.sh
 . "$ROOT/bin/lib/common.sh"
 # shellcheck source=bin/targets/targets.conf
