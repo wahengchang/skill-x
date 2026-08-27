@@ -18,3 +18,4 @@ test-full:
 	bash ./tests/survey-cache-regression.sh
 	bash ./tests/pr10-safety-regression.sh
 	bash ./tests/pr15-regression.sh
+	bash ./tests/uninstall-legacy-regression.sh

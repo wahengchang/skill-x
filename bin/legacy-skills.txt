@@ -1,0 +1,11 @@
+# Historical skill names that were shipped by skill-x and later removed.
+# Runtime uninstall also derives names from local Git history; this file is the
+# fallback for shallow clones and archives where older commits are unavailable.
+example-skill
+funny-text-rewriter
+q-debug
+q-plan
+q-plan-complex
+q-plan-micro
+q-plan-scoped
+q-review
