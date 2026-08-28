@@ -2,12 +2,14 @@
 
 ## 目標與資料流
 
-本專案是個人指令集框架。private Git repository 的唯一受版本控制內容是 **canonical source 與 build 設定**：`commands-src/<name>/SKILL.md`、`_shared/update-check-header.md`、與 `bin/`。`bin/build.sh` 從這些來源產出 disposable artifact tree（`commands/`、`opencode-commands/`），並由各安裝 / 同步腳本部署到對應工具。互動式個人電腦把部署版本 symlink 到各工具；不可變 image 在 build 階段複製指定 ref 的部署版本。
+本專案以 `commands-src/` 作為唯一作者來源，並有兩個 distribution surface：`bin/build-registry.sh` 產生、需要 commit 的 `skills/`，供 `npx skills add` 直接安裝；`bin/build.sh` 產生 gitignored 的 `commands/` 與 `opencode-commands/`，只供既有 checkout-based lifecycle 使用。
 
 ```text
 commands-src/ ───┐
-_shared/      ───┼── bin/build.sh ──> commands/         (gitignored artifact)
-bin/targets/  ───┘          │      └─> opencode-commands/ (gitignored artifact)
+_shared/      ───┼── bin/build-registry.sh ──> skills/ (tracked, self-contained)
+bin/targets/  ───┤
+                 └── bin/build.sh ──> commands/           (gitignored artifact)
+                                      opencode-commands/  (gitignored artifact)
                               │
                               ├─ skill-x install ──> build + sync + manifest
                               ├─ skill-x update  ──> fetch + fast-forward + build + sync + doctor
@@ -26,6 +28,7 @@ update / uninstall）。`install.sh`、`bin/sync-skills.sh`、`bin/doctor.sh`、
 | **canonicalize**（動詞） | 把 raw skill 釐清並整理成本專案標準格式的動作。 |
 | **canonical skill** | canonicalize 的結果；位於 `commands-src/<name>/SKILL.md`，是技能內容的單一來源。 |
 | **build input** | 受版本控制的來源：`commands-src/`、`_shared/`、與 `bin/`（包含 `bin/targets/`）。 |
+| **published skill** | `skills/<name>/` 下可由 `npx skills` 單獨安裝的自包含 skill；由 source 產生、進 Git、不可手動編輯。 |
 | **generated artifact** | `bin/build.sh` 產生的 disposable artifact tree，列在 `.gitignore`。`commands/`、`opencode-commands/`，以及未來任何新增的 transform 產物。 |
 | **canonical-format consumer** | 直接讀取 `commands/<name>/SKILL.md` 不需轉換的 runtime；由 `CANONICAL_CONSUMERS` 描述。 |
 | **transform adapter** | 把 common build 完成後的 canonical artifact 轉成另一個 runtime 需要的 wire format 的腳本，位於 `bin/targets/<adapter>.sh`。 |

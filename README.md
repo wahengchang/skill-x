@@ -4,6 +4,41 @@ skill-x 是一套參考 Garry Tan 的 gstack 產品形態打造的個人 skill �
 
 內建的 `x-discovery`、`x-plan`、`x-plan-product`、`x-plan-design`、`x-plan-devex`、`x-plan-eng`、`x-review`、`x-debug`、`x-ship` 與 `x-housekeeping` 十顆技能，串起設計 → 開發 → ship 的 handover 週期，讓各階段的工作脈絡能持續交接。
 
+## 安裝（推薦）
+
+正確的 npm-style 指令是 `npx skills add`。預設是 **project-local**，不會寫入 global：
+
+```bash
+npx skills add wahengchang/skill-x --list
+npx skills add wahengchang/skill-x
+```
+
+只安裝指定技能，並明確同步給 Claude Code、Codex 與 OpenCode：
+
+```bash
+npx skills add wahengchang/skill-x \
+  --skill x-discovery --skill x-plan --skill x-ship \
+  -a claude-code -a codex -a opencode
+```
+
+只有明確加 `-g` 才會安裝到 user-global：
+
+```bash
+npx skills add wahengchang/skill-x -g
+npx skills list -g
+npx skills remove -g x-plan
+```
+
+移除 project-local skill 不加 `-g`：
+
+```bash
+npx skills remove x-plan
+```
+
+> **同名安全：** agent skills 共用以 skill name 為主的扁平命名空間，skills CLI 目前仍有同名來源可能互相取代的已知問題。安裝前先跑 `npx skills list` / `npx skills list -g`；發現同名時，先保留其中一個或改名，不要直接覆蓋。這也是 `x-*` / `q-*` prefix 必須保留的原因。
+>
+> **OMP：** skills CLI 目前沒有獨立的 `omp` target。請安裝到 OMP 實際啟動的 `claude-code`、`codex`、`opencode`；已經在跑的 CLI session 請重開，避免它仍使用啟動時快取的 skill 清單。
+
 ### 一眼看懂工作週期
 
 ```text
@@ -29,7 +64,7 @@ skill-x 是一套參考 Garry Tan 的 gstack 產品形態打造的個人 skill �
                       └── uninstall ── 移除受管理的部署項目
 ```
 
-## 五分鐘快速上手
+## Legacy checkout-based 安裝
 
 ```bash
 git clone https://github.com/wahengchang/skill-x.git ~/skill-x
@@ -172,9 +207,9 @@ bin/skill-x uninstall --remove-checkout    # 連 checkout 一起刪除
 請使用 canonicalize-skill：當我要求整理每週工作紀錄時，產生一份依專案分組的週報。
 ```
 
-canonical skill 的唯一來源仍是 `commands-src/<name>/`；不要直接編輯產生的 `commands/`、`opencode-commands/`，也不要把這些 disposable artifact commit 進 repository（它們在 `.gitignore`）。建立或修改完成後執行 `bin/build.sh`，只需要 commit source 與 build 設定。若要手動撰寫或查看完整命名規則，請參考 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+canonical skill 的唯一作者來源仍是 `commands-src/<name>/`。建立或修改後先執行 `bin/build-registry.sh`，並 commit 產生的 `skills/` 公開發佈面；再執行 `bin/build.sh` 驗證 legacy lifecycle。不要直接編輯 `skills/`、`commands/` 或 `opencode-commands/`。若要手動撰寫或查看完整命名規則，請參考 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
-`canonicalize-skill` 是建置階段的 authoring tool，不是此 framework 的輸出；它不會進入 `commands/`，也不會被分發到各 AI agents。framework 的輸入是 `commands-src/` 中完成 canonicalize 的 skill set，輸出才是跨 agents 使用的 generated skill set。
+`canonicalize-skill` 是建置階段的 authoring tool，不是此 framework 的輸出；它不會進入 `skills/` 或 `commands/`。framework 的輸入是 `commands-src/` 中完成 canonicalize 的 skill set；`skills/` 是 `npx skills` 讀取的 tracked distribution，`commands/` 則只服務 legacy lifecycle。
 
 支援檔案（例如 `scripts/`、`references/`）會一併複製。修改 `_shared/update-check-header.md` 後也必須重跑 `bin/build.sh`。
 

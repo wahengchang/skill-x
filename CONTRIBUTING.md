@@ -9,11 +9,12 @@
 | 資料夾 | 你會做什麼 |
 |---|---|
 | `commands-src/<name>/SKILL.md` | **唯一手動編輯的地方**。乾淨的技能內容，不含更新檢查樣板文字。 |
+| `skills/<name>/` | `bin/build-registry.sh` 產生的 `npx skills` 發佈面。**不要手動改，但要 commit**。 |
 | `commands/<name>/SKILL.md` | `bin/build.sh` 產生的 canonical artifact（frontmatter 之後多了 `_shared/update-check-header.md` 的內容）。**永遠不要手動改這裡**，也**不要 commit**——它是 `.gitignore` 的 disposable artifact，下次 build 會被覆蓋。 |
 | `opencode-commands/<name>.md` | `bin/build.sh` 產生的 OpenCode v1 command shim，讓技能可用 `/<name>` 叫用。同樣**不要手動改也不要 commit**；它也是 gitignored artifact。 |
 | `~/.claude/skills/`、`~/.agents/skills/` 等 | `bin/skill-x sync` 把 `commands/` symlink 過去的地方，AI 工具實際讀取的路徑。 |
 
-一句話：**改 `commands-src/` → `bin/build.sh` 重新產生 `commands/` 與 `opencode-commands/` → 只要 commit source 與 build 設定，不要 commit artifact**。
+一句話：**改 `commands-src/` → `bin/build-registry.sh` 產生並 commit `skills/` → `bin/build.sh` 驗證 legacy artifacts → test**。
 
 ---
 
@@ -35,7 +36,7 @@ description: 一句話講清楚這個技能做什麼、什麼情況該被觸發�
 實際的指令內容寫在這裡。
 EOF
 
-# 3.（可選）需要輔助檔案就直接放同一個資料夾，build.sh 會原封不動複製
+# 3.（可選）需要輔助檔案就直接放同一個資料夾，兩個 build 都會 materialize
 mkdir -p commands-src/<skill-name>/scripts
 # commands-src/<skill-name>/scripts/helper.sh ...
 

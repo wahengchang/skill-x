@@ -1,6 +1,8 @@
 ---
 name: canonicalize-skill
 description: 當使用者提供粗略、未格式化或只有一句話的技能構想，並希望將它加入 skill-x-starter 時，在開發環境中把 raw skill 整理成 commands-src/<name>/SKILL.md。
+metadata:
+  internal: true
 ---
 
 # Canonicalize skill

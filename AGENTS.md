@@ -3,12 +3,12 @@
 - `commands-src/` and `_shared/` are the only tracked build inputs. Skill content
   lives in `commands-src/<name>/SKILL.md`; `_shared/update-check-header.md` is
   the shared text inserted into every generated skill.
-- Generated `commands/`, `opencode-commands/`, and any future artifact trees are
-  disposable build outputs (declared in `.gitignore`). Never hand-edit them and
-  never commit them; they will be overwritten by `bin/build.sh`.
-- After changing a skill or `_shared/update-check-header.md`, run `bin/build.sh`
-  so `git status` stays clean of generated directories and so downstream
-  `bin/sync-skills.sh` / `bin/cloud-bootstrap.sh` have something to install.
+- Generated `commands/` and `opencode-commands/` remain disposable legacy
+  build outputs. The tracked `skills/` tree is the public `npx skills`
+  distribution: never hand-edit it, but do commit the result of
+  `bin/build-registry.sh`.
+- After changing a skill, run `bin/build-registry.sh` for the public
+  distribution and `bin/build.sh` for legacy lifecycle users.
 - Run the tests before finishing. Which suite depends on what you touched:
   - **`make test`** (fast, the routine path) is enough for low-risk changes
     that only touch skill content: `commands-src/**/SKILL.md`, skill support
