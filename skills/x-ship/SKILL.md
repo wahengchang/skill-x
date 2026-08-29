@@ -271,4 +271,3 @@ When the user says `continue`, resolve the target in this order:
 5. otherwise the highest-priority `ready` WG that has not started.
 
 Ask only when several targets remain plausible after all five, and ask once.
-

@@ -83,4 +83,3 @@ artifacts exactly as Direct mode does — the same `design prepare` call, with t
 three capability results stated explicitly and `--fingerprint` set to the
 planning fingerprint the orchestrator handed over, so the design directory is
 reused rather than rebuilt while that fingerprint holds.
-

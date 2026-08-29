@@ -68,4 +68,3 @@ together with a `blocked` status, via `--owner-decision-file`; name in the
 question the exact canonical input an accepted answer would change
 (`## Problem / Goal`, `## Scope`, `## Current → Desired Behavior`, the route, or
 the selected work), so the orchestrator can edit first and accept second.
-

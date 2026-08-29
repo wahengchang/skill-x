@@ -154,4 +154,3 @@ product, or priority call; a destructive or irreversible action that cannot be
 judged safe; a merge conflict or test failure; a review needing non-mechanical
 fixes; a root cause that evidence cannot confirm; a target that the artifacts
 cannot disambiguate.
-

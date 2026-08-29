@@ -115,4 +115,3 @@ x_survey_regular_files() {
     [[ -f $X_MAIN_ROOT/$f && ! -L $X_MAIN_ROOT/$f ]] && printf '%s\0' "$f"
   done < <(x_survey_files)
 }
-

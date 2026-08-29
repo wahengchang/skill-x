@@ -190,4 +190,3 @@ x_survey_section_graph() {
   printf 'Plain output, not `--json`: the JSON envelope is about twice the bytes and\n'
   printf 'carries the same facts. Open files only for the few symbols these point at.\n\n'
 }
-

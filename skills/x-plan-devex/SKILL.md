@@ -62,4 +62,3 @@ Everything else about this facet — intake, evidence, permitted fields, the
 status vocabulary, deferral rules and forbidden lifecycle mutations — is in
 `references/facet-contract.md`. Follow it there; it is the canonical text and
 restating it here only doubled what a plan loads into context.
-
