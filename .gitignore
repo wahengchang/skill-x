@@ -1,14 +1,10 @@
-# Build artifacts - generated from commands-src/
-commands/
-opencode-commands/
-
 # Editor and system files
 *.swp
 *.swo
 .DS_Store
+
+# Runtime state created by skills
 .dev-hub/active/
 .dev-hub/worktrees/
 .dev-hub/runtime/
-
-# CodeGraph index
 .codegraph/
