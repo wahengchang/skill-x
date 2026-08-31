@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+# xdh — deterministic helper for the x-* development-cycle skills.
+#
+# The skills own the reasoning; this script owns the operations that must be
+# exactly repeatable: resolving the shared .dev-hub from any worktree, handing
+# out collision-free IDs, creating Cycles/work items/Work Groups idempotently,
+# fingerprinting a review target, upserting a single PR, and refusing to delete
+# anything whose safety is not proven.
+#
+# Output is machine-readable KEY=value lines (eval-friendly) or "TYPE ..."
+# records, one per line. Everything it writes lives under .dev-hub/ in the
+# repository — never in $HOME, never in a shared /tmp.
+#
+# Usage: xdh <command> [options]   (see `xdh help`)
+
+set -euo pipefail
+
+XDH_SELF=${BASH_SOURCE[0]}
+while [[ -L $XDH_SELF ]]; do
+  _target=$(readlink -- "$XDH_SELF")
+  case $_target in
+    /*) XDH_SELF=$_target ;;
+    *) XDH_SELF=$(dirname -- "$XDH_SELF")/$_target ;;
+  esac
+done
+XDH_DIR=$(cd -- "$(dirname -- "$XDH_SELF")" && pwd)
+XDH_LIB="$XDH_DIR/lib"
+XDH_TEMPLATES=$(cd -- "$XDH_DIR/.." && pwd)/templates
+
+# shellcheck source=lib/common.sh
+. "$XDH_LIB/common.sh"
+# shellcheck source=lib/cycle.sh
+. "$XDH_LIB/cycle.sh"
+# shellcheck source=lib/wg.sh
+. "$XDH_LIB/wg.sh"
+# shellcheck source=lib/review.sh
+. "$XDH_LIB/review.sh"
+# shellcheck source=lib/pr.sh
+. "$XDH_LIB/pr.sh"
+# shellcheck source=lib/clean.sh
+. "$XDH_LIB/clean.sh"
+# shellcheck source=lib/plan.sh
+. "$XDH_LIB/plan.sh"
+# shellcheck source=lib/survey.sh
+. "$XDH_LIB/survey.sh"
+
+x_usage() {
+  cat <<'EOF'
+xdh — deterministic helper for the x-* development-cycle skills
+
+Locations
+  xdh paths                          Resolve main repo root and .dev-hub paths
+  xdh init                           Create .dev-hub skeleton + .gitignore entries
+
+Project survey
+  xdh survey ensure [--force]        Build/reuse the machine-derived project snapshot
+  xdh survey path                    Report the snapshot path and freshness only
+
+Cycles
+  xdh cycle new --slug S [--title T] [--scope S] [--prompt P]
+  xdh cycle list
+  xdh cycle show [--cycle C]
+  xdh cycle check [--cycle C]        Closure gate; prints BLOCKER lines
+  xdh cycle close --cycle C --summary S [--status S] [--decisions D] [--force]
+
+Work
+  xdh id next --kind WK|IS|SP|WG|RV|DBG [--cycle C] [--dir D]
+  xdh item new --type issue|spike --slug S [--title T] [--source WK-001]
+               [--owner O] [--wg WG-001] [--priority P2] [--cycle C] [--dir D]
+               [--route product,design,devex,engineering] [--selected-work IDs]
+  xdh wg new --slug S [--title T] [--items "IS-001"] [--owner O]
+             [--base B] [--from REF] [--cycle C]
+  xdh artifact new --kind RV|DBG [--target T] [--base B] [--implementer A]
+             [--reviewer A] [--reviewer-type T] [--reviewer-model M] [--review-mode M]
+             [--independent yes|no] [--fingerprint F] [--tree T]
+             [--cycle C] [--dir D]
+  xdh runtime new --skill S [--slug S]
+
+Documents
+  xdh field get <file> <Field>
+  xdh field set <file> <Field> <value>
+
+Plan gate
+  xdh plan init <file> --route R --selected-work IDs
+  xdh plan fingerprint <file>
+  xdh plan facet set <file> --facet F --status S --evidence E [--section-file F] [--owner-decision-file F]
+  xdh plan facet set <file> --facet F --status completed|deferred-owner|deferred-missing --reaffirm
+                                     Re-stamp an already-recorded status at the current fingerprint
+  xdh plan decision set <file> --id OD-NNN --facet F --question Q --decision D --state S
+  xdh plan check <file>
+  xdh plan ready <file>
+  xdh design prepare --slug S --fingerprint FP --image-generate A --image-display A --image-compare A [--cycle C|--dir D]
+
+Review target
+  xdh fingerprint [--base B]
+  xdh fingerprint verify --expect FP [--base B]
+
+Delivery
+  xdh pr status [--branch B]
+  xdh pr upsert --title T --body-file F [--branch B] [--base B] [--draft]
+
+Worktrees and housekeeping
+  xdh worktree list
+  xdh worktree remove --path P [--force]
+  xdh clean scan [--base B] [--older-than N]
+  xdh clean apply [--dry-run] [--base B] [--older-than N]
+EOF
+}
+
+x_cmd_paths() {
+  x_resolve_paths
+  x_emit X_MAIN_ROOT "$X_MAIN_ROOT"
+  x_emit X_CURRENT_ROOT "$X_CURRENT_ROOT"
+  x_emit X_DEV_HUB "$X_DEV_HUB"
+  x_emit X_ACTIVE "$X_ACTIVE"
+  x_emit X_WORKTREES "$X_WORKTREES"
+  x_emit X_RUNTIME "$X_RUNTIME"
+  x_emit X_LOGS "$X_LOGS"
+  x_emit X_BASE_BRANCH "$(x_base_branch)"
+}
+
+x_cmd_cycle() {
+  local sub=${1:-}; shift || true
+  case $sub in
+    new) x_cycle_new "$@" ;;
+    list) x_cycle_list || x_die "no active cycles" ;;
+    show|check)
+      local cycle="" dir
+      while (( $# )); do
+        case $1 in
+          --cycle) cycle=$2; shift 2 ;;
+          *) x_die "cycle $sub: unknown option $1" ;;
+        esac
+      done
+      dir=$(x_cycle_resolve "$cycle")
+      if [[ $sub == show ]]; then x_cycle_show "$dir"; else x_cycle_check "$dir"; fi
+      ;;
+    close) x_cycle_close "$@" ;;
+    *) x_die "cycle: unknown subcommand '${sub:-}'" ;;
+  esac
+}
+
+x_cmd_id() {
+  local sub=${1:-}; shift || true
+  [[ $sub == next ]] || x_die "id: unknown subcommand '${sub:-}'"
+  local kind="" cycle="" dir=""
+  while (( $# )); do
+    case $1 in
+      --kind) kind=$2; shift 2 ;;
+      --cycle) cycle=$2; shift 2 ;;
+      --dir) dir=$2; shift 2 ;;
+      *) x_die "id next: unknown option $1" ;;
+    esac
+  done
+  x_require_value --kind "$kind"
+  case $kind in
+    WK|IS|SP|WG|RV|DBG) ;;
+    *) x_die "id next: --kind must be one of WK IS SP WG RV DBG" ;;
+  esac
+  [[ -n $dir ]] || dir=$(x_cycle_resolve "$cycle")
+  local id; id=$(x_id_next "$kind" "$dir")
+  x_emit X_NEXT_ID "$id"
+}
+
+x_cmd_field() {
+  local sub=${1:-}; shift || true
+  case $sub in
+    get) (( $# == 2 )) || x_die "field get <file> <Field>"; x_field_get "$1" "$2" ;;
+    set)
+      (( $# == 3 )) || x_die "field set <file> <Field> <value>"
+      x_plan_guard_ready "$1" "$2" "$3"
+      x_field_set "$1" "$2" "$3"
+      x_emit X_FIELD_SET "$2" ;;
+    *) x_die "field: unknown subcommand '${sub:-}'" ;;
+  esac
+}
+
+x_cmd_plan() {
+  local sub=${1:-}; shift || true
+  case $sub in
+    init) x_plan_init "$@" ;;
+    fingerprint) x_plan_fingerprint "$@" ;;
+    facet)
+      [[ ${1:-} == set ]] || x_die "plan facet: expected 'set'"
+      shift
+      x_plan_facet_set "$@" ;;
+    decision)
+      [[ ${1:-} == set ]] || x_die "plan decision: expected 'set'"
+      shift
+      x_plan_decision_set "$@" ;;
+    check) x_plan_check "$@" ;;
+    ready) x_plan_ready "$@" ;;
+    *) x_die "plan: unknown subcommand '${sub:-}'" ;;
+  esac
+}
+
+x_cmd_plan_facet() {
+  local sub=${1:-}; shift || true
+  [[ $sub == set ]] || x_die "plan facet: unknown subcommand '${sub:-}'"
+  x_plan_facet_set "$@"
+}
+
+x_cmd_design() {
+  local sub=${1:-}; shift || true
+  case $sub in
+    prepare) x_design_prepare "$@" ;;
+    *) x_die "design: unknown subcommand '${sub:-}'" ;;
+  esac
+}
+
+x_cmd_fingerprint() {
+  if [[ ${1:-} == verify ]]; then
+    shift
+    x_fingerprint_verify "$@"
+  else
+    x_fingerprint "$@"
+  fi
+}
+
+x_cmd_pr() {
+  local sub=${1:-}; shift || true
+  case $sub in
+    status) x_pr_status "$@" ;;
+    upsert) x_pr_upsert "$@" ;;
+    *) x_die "pr: unknown subcommand '${sub:-}'" ;;
+  esac
+}
+
+x_cmd_worktree() {
+  local sub=${1:-}; shift || true
+  case $sub in
+    list) x_worktree_list ;;
+    remove) x_worktree_remove "$@" ;;
+    *) x_die "worktree: unknown subcommand '${sub:-}'" ;;
+  esac
+}
+
+x_cmd_clean() {
+  local sub=${1:-}; shift || true
+  case $sub in
+    scan) x_clean_scan "$@" ;;
+    apply) x_clean_apply "$@" ;;
+    *) x_die "clean: unknown subcommand '${sub:-}'" ;;
+  esac
+}
+
+x_cmd_item() {
+  local sub=${1:-}; shift || true
+  [[ $sub == new ]] || x_die "item: unknown subcommand '${sub:-}'"
+  x_item_new "$@"
+}
+
+x_cmd_wg() {
+  local sub=${1:-}; shift || true
+  [[ $sub == new ]] || x_die "wg: unknown subcommand '${sub:-}'"
+  x_wg_new "$@"
+}
+
+x_cmd_artifact() {
+  local sub=${1:-}; shift || true
+  [[ $sub == new ]] || x_die "artifact: unknown subcommand '${sub:-}'"
+  x_artifact_new "$@"
+}
+
+x_cmd_runtime() {
+  local sub=${1:-}; shift || true
+  [[ $sub == new ]] || x_die "runtime: unknown subcommand '${sub:-}'"
+  x_runtime_new "$@"
+}
+
+x_cmd_survey() {
+  local sub=${1:-}; shift || true
+  case $sub in
+    ensure) x_survey_ensure "$@" ;;
+    path) x_survey_path "$@" ;;
+    *) x_die "survey: unknown subcommand '${sub:-}'" ;;
+  esac
+}
+
+x_cmd_init() {
+  x_ensure_dev_hub
+  x_ensure_gitignore
+  x_cmd_paths
+}
+
+main() {
+  local cmd=${1:-help}; shift || true
+  case $cmd in
+    paths) x_cmd_paths "$@" ;;
+    init) x_cmd_init "$@" ;;
+    cycle) x_cmd_cycle "$@" ;;
+    id) x_cmd_id "$@" ;;
+    item) x_cmd_item "$@" ;;
+    wg) x_cmd_wg "$@" ;;
+    artifact) x_cmd_artifact "$@" ;;
+    runtime) x_cmd_runtime "$@" ;;
+    field) x_cmd_field "$@" ;;
+    fingerprint) x_cmd_fingerprint "$@" ;;
+    plan) x_cmd_plan "$@" ;;
+    survey) x_cmd_survey "$@" ;;
+    design) x_cmd_design "$@" ;;
+    pr) x_cmd_pr "$@" ;;
+    worktree) x_cmd_worktree "$@" ;;
+    clean) x_cmd_clean "$@" ;;
+    help|-h|--help) x_usage ;;
+    *) x_usage >&2; x_die "unknown command: $cmd" ;;
+  esac
+}
+
+main "$@"
